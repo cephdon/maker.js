@@ -94,6 +94,12 @@ var MakerJsRequireIframe;
     function getHtml() {
         return htmls.concat(getLogsHtmls()).join('');
     }
+    MakerJsRequireIframe.getHtml = getHtml;
+    function resetLog() {
+        htmls = [];
+        logs = [];
+    }
+    MakerJsRequireIframe.resetLog = resetLog;
     var head;
     var loads = {};
     var reloads = [];
@@ -168,8 +174,7 @@ var MakerJsRequireIframe;
         //run the code in 2 passes, first - to cache all required libraries, secondly the actual execution
         function complete2() {
             //reset any calls to document.write
-            htmls = [];
-            logs = [];
+            resetLog();
             //reinstate alert
             window.alert = originalAlert;
             var originalFn = parent.makerjs.exporter.toSVG;
@@ -179,8 +184,17 @@ var MakerJsRequireIframe;
                     captureExportedModel = itemToExport;
                 }
                 else if (Array.isArray(itemToExport)) {
-                    //issue: this won't handle an array of models
-                    captureExportedModel = { paths: itemToExport };
+                    captureExportedModel = {};
+                    itemToExport.forEach(function (x, i) {
+                        if (makerjs.isModel(x)) {
+                            captureExportedModel.models = captureExportedModel.models || {};
+                            captureExportedModel.models[i] = x;
+                        }
+                        if (makerjs.isPath(x)) {
+                            captureExportedModel.paths = captureExportedModel.paths || {};
+                            captureExportedModel.paths[i] = x;
+                        }
+                    });
                 }
                 else if (parent.makerjs.isPath(itemToExport)) {
                     captureExportedModel = { paths: { "0": itemToExport } };
@@ -201,7 +215,7 @@ var MakerJsRequireIframe;
                 else {
                     //restore properties from the "this" keyword
                     model = {};
-                    var props = ['layer', 'models', 'notes', 'origin', 'paths', 'type', 'units'];
+                    var props = ['layer', 'models', 'notes', 'origin', 'paths', 'type', 'units', 'exporterOptions'];
                     var hasProps = false;
                     for (var i = 0; i < props.length; i++) {
                         var prop = props[i];
@@ -276,4 +290,11 @@ var MakerJsRequireIframe;
     }
     mockWalk(parent.makerjs, mockMakerJs);
 })(MakerJsRequireIframe || (MakerJsRequireIframe = {}));
+parent.MakerJsPlayground.mainThreadConstructor = function (kit, params) {
+    MakerJsRequireIframe.resetLog();
+    return {
+        model: parent.makerjs.kit.construct(kit, params),
+        html: MakerJsRequireIframe.getHtml()
+    };
+};
 //# sourceMappingURL=require-iframe.js.map

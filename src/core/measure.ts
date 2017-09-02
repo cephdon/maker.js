@@ -15,7 +15,7 @@ namespace MakerJs.measure {
      * @param baseMeasure The measurement to increase.
      * @param addMeasure The additional measurement.
      * @param addOffset Optional offset point of the additional measurement.
-     * @returns The increased original measurement (for chaining).
+     * @returns The increased original measurement (for cascading).
      */
     export function increase(baseMeasure: IMeasure, addMeasure: IMeasure): IMeasure {
 
@@ -136,8 +136,11 @@ namespace MakerJs.measure {
      * @returns Boolean true if point is between (or equal to) the line's origin and end points.
      */
     export function isBetweenPoints(pointInQuestion: IPoint, line: IPathLine, exclusive: boolean): boolean {
+        var oneDimension = false;
         for (var i = 2; i--;) {
             if (round(line.origin[i] - line.end[i], .000001) == 0) {
+                if (oneDimension) return false;
+                oneDimension = true;
                 continue;
             }
             var origin_value = round(line.origin[i]);
@@ -148,23 +151,88 @@ namespace MakerJs.measure {
     }
 
     /**
-     * Check if a given bezier seed is simply a line.
+     * Check if a given bezier seed has all points on the same slope.
      * 
      * @param seed The bezier seed to test.
+     * @param exclusive Optional boolean to test only within the boundary of the endpoints.
      * @returns Boolean true if bezier seed has control points on the line slope and between the line endpoints.
      */
-    export function isBezierSeedLinear(seed: IPathBezierSeed): boolean {
+    export function isBezierSeedLinear(seed: IPathBezierSeed, exclusive?: boolean): boolean {
 
         //create a slope from the endpoints
         var slope = lineSlope(seed);
 
         for (var i = 0; i < seed.controls.length; i++) {
-            if (!(isPointOnSlope(seed.controls[i], slope) && isBetweenPoints(seed.controls[i], seed, false))) {
-                return false;
+            if (!(isPointOnSlope(seed.controls[i], slope))) {
+                if (!exclusive) return false;
+                if (isBetweenPoints(seed.controls[i], seed, false)) return false;
             }
         }
 
         return true;
+    }
+
+    var graham_scan = require('graham_scan') as typeof ConvexHullGrahamScan;
+
+    /**
+     * @private
+     */
+    function serializePoint(p: number[]) {
+        return p.join(',');
+    }
+
+    /**
+     * Check for flow of paths in a chain being clockwise or not.
+     * 
+     * @param chainContext The chain to test.
+     * @param out_result Optional output object, if provided, will be populated with convex hull results.
+     * @returns Boolean true if paths in the chain flow clockwise.
+     */
+    export function isChainClockwise(chainContext: IChain, out_result?: { hullPoints?: IPoint[], keyPoints?: IPoint[] }): boolean {
+
+        //cannot do non-endless or circle
+        if (!chainContext.endless || chainContext.links.length === 1) {
+            return null;
+        }
+
+        var convexHull = new graham_scan();
+        var pointsInChainOrder: string[] = [];
+
+        function add(endPoint: IPoint) {
+            convexHull.addPoint(endPoint[0], endPoint[1]);
+            pointsInChainOrder.push(serializePoint(endPoint as number[]));
+        }
+
+        var keyPoints = chain.toKeyPoints(chainContext);
+        keyPoints.forEach(add);
+
+        //we only need to deal with 3 points
+        var hull = convexHull.getHull();
+        var hullPoints = hull.slice(0, 3).map((p): string => serializePoint([p.x, p.y]));
+        var ordered: string[] = [];
+        pointsInChainOrder.forEach(p => {
+            if (~hullPoints.indexOf(p)) ordered.push(p);
+        });
+
+        //now make sure endpoints of hull are endpoints of ordered. do this by managing the middle point
+        switch (ordered.indexOf(hullPoints[1])) {
+            case 0:
+                //shift down
+                ordered.unshift(ordered.pop());
+                break;
+            case 2:
+                //shift up
+                ordered.push(ordered.shift());
+                break;
+        }
+
+        if (out_result) {
+            out_result.hullPoints = hull.map(p => [p.x, p.y]);
+            out_result.keyPoints = keyPoints;
+        }
+
+        //the hull is counterclockwise, so the result is clockwise if the first elements do not match
+        return hullPoints[0] != ordered[0];
     }
 
     /**
@@ -363,10 +431,31 @@ namespace MakerJs.measure {
     }
 
     /**
+     * Measures the length of all paths in a model.
+     * 
+     * @param modelToMeasure The model containing paths to measure.
+     * @returns Length of all paths in the model.
+     */
+    export function modelPathLength(modelToMeasure: IModel): number {
+        var total = 0;
+
+        model.walk(modelToMeasure, {
+            onPath: function (walkedPath: IWalkPath) {
+                total += pathLength(walkedPath.pathContext);
+            }
+        });
+
+        return total;
+    }
+
+    /**
      * @private
      */
     function cloneMeasure(measureToclone: IMeasure): IMeasure {
-        return { high: [measureToclone.high[0], measureToclone.high[1]], low: [measureToclone.low[0], measureToclone.low[1]] };
+        return {
+            high: point.clone(measureToclone.high),
+            low: point.clone(measureToclone.low)
+        };
     }
 
     /**
@@ -376,7 +465,7 @@ namespace MakerJs.measure {
      * @param atlas Optional atlas to save measurements.
      * @returns object with low and high points.
      */
-    export function modelExtents(modelToMeasure: IModel, atlas?: measure.Atlas): IMeasure {
+    export function modelExtents(modelToMeasure: IModel, atlas?: measure.Atlas): IMeasureWithCenter {
 
         function increaseParentModel(childRoute: string[], childMeasurement: IMeasure) {
 
@@ -416,7 +505,31 @@ namespace MakerJs.measure {
 
         atlas.modelsMeasured = true;
 
-        return atlas.modelMap[''];
+        var m = atlas.modelMap[''] as IMeasureWithCenter;
+
+        if (m) {
+            return augment(m);
+        }
+
+        return m;
+    }
+
+
+    /**
+     * Augment a measurement - add more properties such as center point, height and width.
+     * 
+     * @param measureToAugment The measurement to augment.
+     * @returns Measurement object with augmented properties.
+     */
+    export function augment(measureToAugment: IMeasure): IMeasureWithCenter {
+
+        var m = measureToAugment as IMeasureWithCenter;
+
+        m.center = point.average(m.high, m.low);
+        m.width = m.high[0] - m.low[0];
+        m.height = m.high[1] - m.low[1];
+
+        return m;
     }
 
     /**
@@ -455,5 +568,326 @@ namespace MakerJs.measure {
                 modelExtents(this.modelContext, this);
             }
         }
+    }
+
+    /**
+     * @private
+     */
+    function loopIndex(base: number, i: number) {
+        if (i >= base) return i - base;
+        if (i < 0) return i + base;
+        return i;
+    }
+
+    /**
+     * @private
+     */
+    function yAtX(slope: ISlope, x: number) {
+        return slope.slope * x + slope.yIntercept;
+    }
+
+    /**
+     * @private
+     */
+    function pointOnSlopeAtX(line: IPathLine, x: number): IPoint {
+        var slope = lineSlope(line);
+        return [x, yAtX(slope, x)];
+    }
+
+    /**
+     * @private
+     */
+    interface IAngledBoundary {
+        index: number;
+        rotation: number;
+        center: IPoint;
+        width: number;
+        height: number;
+        top: IPathLine;
+        middle: IPathLine;
+        bottom: IPathLine;
+    }
+
+    /**
+     * @private
+     */
+    function isCircular(bounds: IAngledBoundary[]) {
+        for (var i = 1; i < 3; i++) {
+            if (!isPointEqual(bounds[0].center, bounds[i].center, .000001) || !(round(bounds[0].width - bounds[i].width) === 0)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * @private
+     */
+    function getAngledBounds(index: number, modelToMeasure: IModel, rotateModel: number, rotatePaths: number) {
+        model.rotate(modelToMeasure, rotateModel);
+        var m = modelExtents(modelToMeasure);
+        var result: IAngledBoundary = {
+            index: index,
+            rotation: rotatePaths,
+            center: point.rotate(m.center, rotatePaths),
+
+            //model is sideways, so width is based on Y, height is based on X
+            width: m.height,
+            height: m.width,
+
+            bottom: new paths.Line(m.low, [m.high[0], m.low[1]]),
+            middle: new paths.Line([m.low[0], m.center[1]], [m.high[0], m.center[1]]),
+            top: new paths.Line(m.high, [m.low[0], m.high[1]]),
+        };
+        [result.top, result.middle, result.bottom].forEach(line => path.rotate(line, rotatePaths));
+        return result;
+    }
+
+    /**
+     * @private
+     */
+    interface IHexSolution {
+        radius: number,
+        origin: IPoint,
+        type: string,
+        index?: number,
+    }
+
+    /**
+     * @private
+     */
+    function hexSolution(lines: IPathLine[], bounds: IAngledBoundary[]): IHexSolution {
+        var tip = lines[1].origin;
+        var tipX = tip[0];
+        var left = lines[3].origin[0];
+        var right = lines[0].origin[0];
+
+        //see if left edge is in bounds if right edge is on the hex boundary
+        var altRight = tipX - right;
+        if ((right - left) > 2 * altRight) return null;
+
+        //see if right edge is in bounds if left edge is on the hex boundary
+        var altLeft = (tipX - left) / 3;
+        if (altRight < altLeft) return null;
+
+        var altitudeViaSide = Math.min(altLeft, altRight);
+        var radiusViaSide = solvers.equilateralSide(altitudeViaSide);
+
+        //find peaks, then find highest peak
+        var peakPoints = [point.fromSlopeIntersection(lines[1], lines[2]), point.fromSlopeIntersection(lines[4], lines[5])];
+        var peakRadii = peakPoints.map(p => Math.abs(p[1] - tip[1]));
+        var peakNum = (peakRadii[0] > peakRadii[1]) ? 0 : 1;    //top = 0, bottom = 1
+        var radiusViaPeak = peakRadii[peakNum];
+
+        if (radiusViaPeak > radiusViaSide) {
+            var altitudeViaPeak = solvers.equilateralAltitude(radiusViaPeak);
+            var peakX = tipX - 2 * altitudeViaPeak;
+
+            //see if it will contain right side
+            if (right > peakX + altitudeViaPeak) return null;
+
+            //see if it will contain left side
+            if (left < peakX - altitudeViaPeak) return null;
+
+            //at this point, [tipX - 2 * altitudeViaPeak, tip[1]] is a solution for origin.
+            //but we want to best center the result by sliding along the boundary middle, balancing the smallest gap
+            var leftGap = left - peakX + altitudeViaPeak;
+            var peakGap = 2 * altitudeViaPeak - bounds[peakNum + 1].width;
+            var minHalfGap = Math.min(leftGap, peakGap) / 2;
+
+            return {
+                origin: pointOnSlopeAtX(bounds[2 - peakNum].middle, peakX + minHalfGap),
+                radius: radiusViaPeak,
+                type: 'peak ' + peakNum
+            };
+
+        } else {
+
+            return {
+                origin: [tipX - 2 * altitudeViaSide, tip[1]],
+                radius: radiusViaSide,
+                type: 'side'
+            };
+        }
+
+    }
+
+    /**
+     * Measures the minimum bounding hexagon surrounding a model. The hexagon is oriented such that the right and left sides are vertical, and the top and bottom are pointed.
+     * 
+     * @param modelToMeasure The model to measure.
+     * @returns IBoundingHex object which is a hexagon model, with an additional radius property.
+     */
+    export function boundingHexagon(modelToMeasure: IModel): IBoundingHex {
+        var originalMeasure = modelExtents(modelToMeasure);
+        var clone = cloneObject(modelToMeasure) as IModel;
+        var bounds: IAngledBoundary[] = [];
+        var scratch: IModel = { paths: {} };
+
+        model.center(clone);
+
+        function result(radius: number, origin1: IPoint, notes: string): IBoundingHex {
+            return {
+                radius: radius,
+                paths: new models.Polygon(6, radius, 30).paths,
+                origin: point.add(origin1, point.subtract(originalMeasure.center, modelToMeasure.origin)),
+                //models: { scratch: scratch },
+                notes: notes
+            };
+        }
+
+        var boundRotations = [[90, -90], [-60, -30], [-60, 30]];
+
+        while (boundRotations.length) {
+            var rotation = boundRotations.shift();
+            var bound = getAngledBounds(bounds.length, clone, rotation[0], rotation[1]);
+
+            var side = solvers.equilateralSide(bound.width / 2);
+            if (side >= bound.height) {
+                return result(side, bound.center, 'solved by bound ' + bounds.length);
+            }
+
+            bounds.push(bound);
+        }
+
+        //model.rotate(clone, 30);
+        //scratch.models = { clone: clone };
+
+        //check for a circular solution
+        if (isCircular(bounds)) {
+            return result(solvers.equilateralSide(bounds[0].width / 2), bounds[0].center, 'solved as circular');
+        }
+
+        var perimeters = bounds.map(b => b.top).concat(bounds.map(b => b.bottom));
+
+        perimeters.forEach((p, i) => {
+            scratch.paths[i] = p;
+
+            //converge alternate lines to form two triangles
+            path.converge(perimeters[loopIndex(6, i + 2)], p, true);
+        });
+
+        bounds.forEach((b, i) => {
+            scratch.paths['m' + i] = b.middle;
+        });
+
+        var boundCopy = bounds.slice();
+        var solution: IHexSolution;
+
+        //solve a hexagon for every tip, keeping the smallest one
+        for (var i = 0; i < 6; i++) {
+
+            //rotate the scratch area so that we always reference the tip at polar 0
+            if (i > 0) {
+                perimeters.push(perimeters.shift());
+                boundCopy.push(boundCopy.shift());
+                model.rotate(scratch, -60);
+            }
+
+            var s = hexSolution(perimeters, boundCopy);
+            if (s) {
+                if (!solution || s.radius < solution.radius) {
+                    solution = s;
+                    solution.index = i;
+                }
+            }
+        }
+
+        var p = point.rotate(solution.origin, solution.index * 60);
+
+        return result(solution.radius, p, 'solved by ' + solution.index + ' as ' + solution.type);
+    }
+
+    /**
+     * @private
+     */
+    function addUniquePoints(pointArray: IPoint[], pointsToAdd: IPoint[]): number {
+
+        var added = 0;
+
+        function addUniquePoint(pointToAdd: IPoint) {
+            for (var i = 0; i < pointArray.length; i++) {
+                if (measure.isPointEqual(pointArray[i], pointToAdd, .000000001)) {
+                    return;
+                }
+            }
+            pointArray.push(pointToAdd);
+            added++;
+        }
+
+        for (var i = 0; i < pointsToAdd.length; i++) {
+            addUniquePoint(pointsToAdd[i]);
+        }
+
+        return added;
+    }
+
+    /**
+     * @private
+     */
+    function getFarPoint(modelContext: IModel, farPoint?: IPoint, measureAtlas?: measure.Atlas) {
+        if (farPoint) return farPoint;
+
+        var high = measure.modelExtents(modelContext).high;
+        if (high) {
+            return point.add(high, [1, 1]);
+        }
+
+        return [7654321, 1234567];
+    }
+
+    /**
+     * Check to see if a point is inside of a model.
+     * 
+     * @param pointToCheck The point to check.
+     * @param modelContext The model to check against.
+     * @param options Optional IMeasurePointInsideOptions object.
+     * @returns Boolean true if the path is inside of the modelContext.
+     */
+    export function isPointInsideModel(pointToCheck: IPoint, modelContext: IModel, options: IMeasurePointInsideOptions = {}): boolean {
+        if (!options.farPoint) {
+            options.farPoint = getFarPoint(modelContext, options.farPoint, options.measureAtlas);
+        }
+
+        options.out_intersectionPoints = [];
+
+        var isInside: boolean;
+        var lineToFarPoint = new paths.Line(pointToCheck, options.farPoint);
+        var measureFarPoint = measure.pathExtents(lineToFarPoint);
+
+        var walkOptions: IWalkOptions = {
+            onPath: function (walkedPath: IWalkPath) {
+
+                if (options.measureAtlas && !measure.isMeasurementOverlapping(measureFarPoint, options.measureAtlas.pathMap[walkedPath.routeKey])) {
+                    return;
+                }
+
+                var intersectOptions: IPathIntersectionOptions = { path2Offset: walkedPath.offset };
+
+                var farInt = path.intersection(lineToFarPoint, walkedPath.pathContext, intersectOptions);
+
+                if (farInt) {
+                    var added = addUniquePoints(options.out_intersectionPoints, farInt.intersectionPoints);
+
+                    //if number of intersections is an odd number, flip the flag.
+                    if (added % 2 == 1) {
+                        isInside = !!!isInside;
+                    }
+                }
+            },
+            beforeChildWalk: function (innerWalkedModel: IWalkModel): boolean {
+
+                if (!options.measureAtlas) {
+                    return true;
+                }
+
+                //see if there is a model measurement. if not, it is because the model does not contain paths.
+                var innerModelMeasurement = options.measureAtlas.modelMap[innerWalkedModel.routeKey];
+                return innerModelMeasurement && measure.isMeasurementOverlapping(measureFarPoint, innerModelMeasurement);
+            }
+        };
+        model.walk(modelContext, walkOptions);
+
+        return !!isInside;
     }
 }

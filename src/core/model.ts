@@ -1,6 +1,74 @@
 namespace MakerJs.model {
 
     /**
+     * Add a path as a child. This is basically equivalent to:
+     * ```
+     * parentModel.paths[childPathId] = childPath;
+     * ```
+     * with additional checks to make it safe for cascading.
+     * 
+     * @param modelContext The model to add to.
+     * @param pathContext The path to add.
+     * @param pathId The id of the path.
+     * @param overWrite Optional flag to overwrite any path referenced by pathId. Default is false, which will create an id similar to pathId.
+     * @returns The original model (for cascading).
+     */
+    export function addPath(modelContext: IModel, pathContext: IPath, pathId: string, overWrite = false): IModel {
+        var id = overWrite ? pathId : getSimilarPathId(modelContext, pathId);
+        modelContext.paths = modelContext.paths || {};
+        modelContext.paths[id] = pathContext;
+        return modelContext;
+    }
+
+    /**
+     * Add a model as a child. This is basically equivalent to:
+     * ```
+     * parentModel.models[childModelId] = childModel;
+     * ```
+     * with additional checks to make it safe for cascading.
+     * 
+     * @param parentModel The model to add to.
+     * @param childModel The model to add.
+     * @param childModelId The id of the child model.
+     * @param overWrite Optional flag to overwrite any model referenced by childModelId. Default is false, which will create an id similar to childModelId.
+     * @returns The original model (for cascading).
+     */
+    export function addModel(parentModel: IModel, childModel: IModel, childModelId: string, overWrite = false): IModel {
+        var id = overWrite ? childModelId : getSimilarModelId(parentModel, childModelId);
+        parentModel.models = parentModel.models || {};
+        parentModel.models[id] = childModel;
+        return parentModel;
+    }
+
+    /**
+     * Add a model as a child of another model. This is basically equivalent to:
+     * ```
+     * parentModel.models[childModelId] = childModel;
+     * ```
+     * with additional checks to make it safe for cascading.
+     * 
+     * @param childModel The model to add.
+     * @param parentModel The model to add to.
+     * @param childModelId The id of the child model.
+     * @param overWrite Optional flag to overwrite any model referenced by childModelId. Default is false, which will create an id similar to childModelId.
+     * @returns The original model (for cascading).
+     */
+    export function addTo(childModel: IModel, parentModel: IModel, childModelId: string, overWrite = false): IModel {
+        addModel(parentModel, childModel, childModelId, overWrite);
+        return childModel;
+    }
+
+    /**
+     * Clone a model. Alias of makerjs.cloneObject(modelToClone)
+     * 
+     * @param modelToClone The model to clone.
+     * @returns A clone of the model you passed.
+     */
+    export function clone(modelToClone: IModel): IModel {
+        return cloneObject(modelToClone);
+    }
+
+    /**
      * Count the number of child models within a given model.
      * 
      * @param modelContext The model containing other models.
@@ -19,21 +87,27 @@ namespace MakerJs.model {
     }
 
     /**
+     * @private
+     */
+    function getSimilarId(map: { [id: string]: any }, id: string): string {
+        if (!map) return id;
+        var i = 0;
+        var newId = id;
+        while (newId in map) {
+            i++;
+            newId = [id, i].join('_');
+        }
+        return newId;
+    }
+
+    /**
      * Get an unused id in the models map with the same prefix.
      * 
      * @param modelContext The model containing the models map.
      * @param modelId The id to use directly (if unused), or as a prefix.
      */
     export function getSimilarModelId(modelContext: IModel, modelId: string): string {
-        if (!modelContext.models) return modelId;
-
-        var i = 0;
-        var newModelId = modelId;
-        while (newModelId in modelContext.models) {
-            i++;
-            newModelId = modelId + '_' + i;
-        }
-        return newModelId;
+        return getSimilarId(modelContext.models, modelId);
     }
 
     /**
@@ -43,15 +117,22 @@ namespace MakerJs.model {
      * @param pathId The id to use directly (if unused), or as a prefix.
      */
     export function getSimilarPathId(modelContext: IModel, pathId: string): string {
-        if (!modelContext.paths) return pathId;
+        return getSimilarId(modelContext.paths, pathId);
+    }
 
-        var i = 0;
-        var newPathId = pathId;
-        while (newPathId in modelContext.paths) {
-            i++;
-            newPathId = pathId + '_' + i;
-        }
-        return newPathId;
+    /**
+     * Set the layer of a model. This is equivalent to:
+     * ```
+     * modelContext.layer = layer;
+     * ```
+     * 
+     * @param modelContext The model to set the layer.
+     * @param layer The layer name.
+     * @returns The original model (for cascading).
+     */
+    export function layer(modelContext: IModel, layer: string): IModel {
+        modelContext.layer = layer;
+        return modelContext;
     }
 
     /**
@@ -59,6 +140,7 @@ namespace MakerJs.model {
      * 
      * @param modelToOriginate The model to originate.
      * @param origin Optional offset reference point.
+     * @returns The original model (for cascading).
      */
     export function originate(modelToOriginate: IModel, origin?: IPoint) {
 
@@ -99,11 +181,15 @@ namespace MakerJs.model {
      * Center a model at [0, 0].
      * 
      * @param modelToCenter The model to center.
+     * @param centerX Boolean to center on the x axis. Default is true.
+     * @param centerY Boolean to center on the y axis. Default is true.
+     * @returns The original model (for cascading).
      */
-    export function center(modelToCenter: IModel) {
+    export function center(modelToCenter: IModel, centerX = true, centerY = true) {
         var m = measure.modelExtents(modelToCenter);
-        var c = point.average(m.high, m.low);
-        var o = point.subtract(modelToCenter.origin || [0, 0], c);
+        var o = modelToCenter.origin || [0, 0];
+        if (centerX) o[0] -= m.center[0];
+        if (centerY) o[1] -= m.center[1];
         modelToCenter.origin = o;
         return modelToCenter;
     }
@@ -164,11 +250,11 @@ namespace MakerJs.model {
     }
 
     /**
-     * Move a model to an absolute point. Note that this is also accomplished by directly setting the origin property. This function exists for chaining.
+     * Move a model to an absolute point. Note that this is also accomplished by directly setting the origin property. This function exists for cascading.
      * 
      * @param modelToMove The model to move.
      * @param origin The new position of the model.
-     * @returns The original model (for chaining).
+     * @returns The original model (for cascading).
      */
     export function move(modelToMove: IModel, origin: IPoint): IModel {
         modelToMove.origin = point.clone(origin);
@@ -180,7 +266,7 @@ namespace MakerJs.model {
      * 
      * @param modelToMove The model to move.
      * @param delta The x & y adjustments as a point object.
-     * @returns The original model (for chaining).
+     * @returns The original model (for cascading).
      */
     export function moveRelative(modelToMove: IModel, delta: IPoint): IModel {
 
@@ -196,7 +282,7 @@ namespace MakerJs.model {
      * 
      * @param modelToPrefix The model to prefix.
      * @param prefix The prefix to prepend on paths ids.
-     * @returns The original model (for chaining).
+     * @returns The original model (for cascading).
      */
     export function prefixPathIds(modelToPrefix: IModel, prefix: string) {
 
@@ -225,29 +311,29 @@ namespace MakerJs.model {
      * @param modelToRotate The model to rotate.
      * @param angleInDegrees The amount of rotation, in degrees.
      * @param rotationOrigin The center point of rotation.
-     * @returns The original model (for chaining).
+     * @returns The original model (for cascading).
      */
     export function rotate(modelToRotate: IModel, angleInDegrees: number, rotationOrigin: IPoint = [0, 0]): IModel {
-        if (modelToRotate) {
+        if (!modelToRotate || !angleInDegrees) return modelToRotate;
 
-            var offsetOrigin = point.subtract(rotationOrigin, modelToRotate.origin);
+        var offsetOrigin = point.subtract(rotationOrigin, modelToRotate.origin);
 
-            if (modelToRotate.type === models.BezierCurve.typeName) {
-                path.rotate((modelToRotate as models.BezierCurve).seed, angleInDegrees, offsetOrigin);
-            }
+        if (modelToRotate.type === models.BezierCurve.typeName) {
+            path.rotate((modelToRotate as models.BezierCurve).seed, angleInDegrees, offsetOrigin);
+        }
 
-            if (modelToRotate.paths) {
-                for (var id in modelToRotate.paths) {
-                    path.rotate(modelToRotate.paths[id], angleInDegrees, offsetOrigin);
-                }
-            }
-
-            if (modelToRotate.models) {
-                for (var id in modelToRotate.models) {
-                    rotate(modelToRotate.models[id], angleInDegrees, offsetOrigin);
-                }
+        if (modelToRotate.paths) {
+            for (var id in modelToRotate.paths) {
+                path.rotate(modelToRotate.paths[id], angleInDegrees, offsetOrigin);
             }
         }
+
+        if (modelToRotate.models) {
+            for (var id in modelToRotate.models) {
+                rotate(modelToRotate.models[id], angleInDegrees, offsetOrigin);
+            }
+        }
+
         return modelToRotate;
     }
 
@@ -257,7 +343,7 @@ namespace MakerJs.model {
      * @param modelToScale The model to scale.
      * @param scaleValue The amount of scaling.
      * @param scaleOrigin Optional boolean to scale the origin point. Typically false for the root model.
-     * @returns The original model (for chaining).
+     * @returns The original model (for cascading).
      */
     export function scale(modelToScale: IModel, scaleValue: number, scaleOrigin = false): IModel {
 
@@ -289,7 +375,7 @@ namespace MakerJs.model {
      * 
      * @param modeltoConvert The model to convert.
      * @param destUnitType The unit system.
-     * @returns The scaled model (for chaining).
+     * @returns The scaled model (for cascading).
      */
     export function convertUnits(modeltoConvert: IModel, destUnitType: string): IModel {
 
@@ -317,6 +403,7 @@ namespace MakerJs.model {
     }
 
     /**
+     * DEPRECATED - use model.walk instead.
      * Recursively walk through all paths for a given model.
      * 
      * @param modelContext The model to walk.
@@ -340,12 +427,11 @@ namespace MakerJs.model {
     }
 
     /**
-     * Recursively walk through all paths for a given model.
+     * Recursively walk through all child models and paths for a given model.
      * 
      * @param modelContext The model to walk.
-     * @param pathCallback Callback for each path.
-     * @param modelCallbackBeforeWalk Callback for each model prior to recursion, which can cancel the recursion if it returns false.
-     * @param modelCallbackAfterWalk Callback for each model after recursion.
+     * @param options Object containing callbacks.
+     * @returns The original model (for cascading).
      */
     export function walk(modelContext: IModel, options: IWalkOptions) {
 
@@ -354,7 +440,7 @@ namespace MakerJs.model {
         function walkRecursive(modelContext: IModel, layer: string, offset: IPoint, route: string[], routeKey: string) {
 
             var newOffset = point.add(modelContext.origin, offset);
-            layer = modelContext.layer || '';
+            layer = (layer != undefined) ? layer : '';
 
             if (modelContext.paths) {
                 for (var pathId in modelContext.paths) {
@@ -364,12 +450,12 @@ namespace MakerJs.model {
 
                     var walkedPath: IWalkPath = {
                         modelContext: modelContext,
-                        layer: pathContext.layer || layer,
+                        layer: (pathContext.layer != undefined) ? pathContext.layer : layer,
                         offset: newOffset,
                         pathContext: pathContext,
                         pathId: pathId,
                         route: route.concat(['paths', pathId]),
-                        routeKey: routeKey + '.paths' + JSON.stringify([pathId])
+                        routeKey: routeKey + (routeKey ? '.' : '') + 'paths' + JSON.stringify([pathId])
                     };
 
                     if (options.onPath) options.onPath(walkedPath);
@@ -384,10 +470,10 @@ namespace MakerJs.model {
 
                     var walkedModel: IWalkModel = {
                         parentModel: modelContext,
-                        layer: childModel.layer || layer,
+                        layer: (childModel.layer != undefined) ? childModel.layer : layer,
                         offset: newOffset,
                         route: route.concat(['models', modelId]),
-                        routeKey: routeKey + '.models' + JSON.stringify([modelId]),
+                        routeKey: routeKey + (routeKey ? '.' : '') + 'models' + JSON.stringify([modelId]),
                         childId: modelId,
                         childModel: childModel
                     };
@@ -396,7 +482,7 @@ namespace MakerJs.model {
                         if (!options.beforeChildWalk(walkedModel)) continue;
                     }
 
-                    walkRecursive(walkedModel.childModel, layer, newOffset, walkedModel.route, walkedModel.routeKey);
+                    walkRecursive(walkedModel.childModel, walkedModel.layer, newOffset, walkedModel.route, walkedModel.routeKey);
 
                     if (options.afterChildWalk) {
                         options.afterChildWalk(walkedModel);
@@ -405,18 +491,24 @@ namespace MakerJs.model {
             }
         }
 
-        walkRecursive(modelContext, '', [0, 0], [], '');
+        walkRecursive(modelContext, modelContext.layer, [0, 0], [], '');
 
+        return modelContext;
     }
 
     /**
      * Move a model so its bounding box begins at [0, 0].
      * 
      * @param modelToZero The model to zero.
+     * @param zeroX Boolean to zero on the x axis. Default is true.
+     * @param zeroY Boolean to zero on the y axis. Default is true.
+     * @returns The original model (for cascading).
      */
-    export function zero(modelToZero: IModel) {
+    export function zero(modelToZero: IModel, zeroX = true, zeroY = true) {
         var m = measure.modelExtents(modelToZero);
-        var z = point.subtract(modelToZero.origin || [0, 0], m.low);
+        var z = modelToZero.origin || [0, 0];
+        if (zeroX) z[0] -= m.low[0];
+        if (zeroY) z[1] -= m.low[1];
         modelToZero.origin = z;
         return modelToZero;
     }

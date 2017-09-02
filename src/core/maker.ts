@@ -27,17 +27,31 @@ namespace MakerJs {
     /**
      * @private
      */
+    function tryEval(name: string) {
+        try {
+            var value = eval(name);
+            return value;
+        }
+        catch (e) { }
+        return;
+    }
+
+    /**
+     * @private
+     */
     function detectEnvironment() {
-        if (('global' in this) && ('process' in this)) {
-            return environmentTypes.NodeJs;
+
+        if (tryEval('WorkerGlobalScope') && tryEval('self')) {
+            return environmentTypes.WebWorker;
         }
 
-        if (('window' in this) && ('document' in this)) {
+        if (tryEval('window') && tryEval('document')) {
             return environmentTypes.BrowserUI;
         }
 
-        if (('WorkerGlobalScope' in this) && ('self' in this)) {
-            return environmentTypes.WebWorker;
+        //put node last since packagers usually add shims for it
+        if (tryEval('global') && tryEval('process')) {
+            return environmentTypes.NodeJs;
         }
 
         return environmentTypes.Unknown;
@@ -74,10 +88,33 @@ namespace MakerJs {
      * 
      * @param n The number to round off.
      * @param accuracy Optional exemplar of number of decimal places.
+     * @returns Rounded number.
      */
-    export function round(n: number, accuracy = .0000001) {
-        var places = 1 / accuracy;
-        return Math.round(n * places) / places;
+    export function round(n: number, accuracy = .0000001): number {
+        var exp = 1 - String(1 / accuracy).length;
+
+        //Adapted from https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math/round
+
+        // If the exp is undefined or zero...
+        if (typeof exp === 'undefined' || +exp === 0) {
+            return Math.round(n);
+        }
+        n = +n;
+        exp = +exp;
+        // If the value is not a number or the exp is not an integer...
+        if (isNaN(n) || !(typeof exp === 'number' && exp % 1 === 0)) {
+            return NaN;
+        }
+        // If the value is negative...
+        if (n < 0) {
+            return -round(-n, accuracy);
+        }
+        // Shift
+        var a = n.toString().split('e');
+        n = Math.round(+(a[0] + 'e' + (a[1] ? (+a[1] - exp) : -exp)));
+        // Shift back
+        a = n.toString().split('e');
+        return +(a[0] + 'e' + (a[1] ? (+a[1] + exp) : exp));
     }
 
     /**
@@ -92,13 +129,52 @@ namespace MakerJs {
             var element = route[i];
             var newElement: string;
             if (i % 2 === 0) {
-                newElement = '.' + element;
+                newElement = (i > 0 ? '.' : '') + element;
             } else {
                 newElement = JSON.stringify([element]);
             }
             converted.push(newElement);
         }
         return converted.join('');
+    }
+
+    /**
+     * Travel along a route inside of a model to extract a specific node in its tree.
+     * 
+     * @param modelContext Model to travel within.
+     * @param route String of a flattened route, or a string array of route segments.
+     * @returns Model or Path object within the modelContext tree.
+     */
+    export function travel(modelContext: IModel, route: string | string[]) {
+        if (!modelContext || !route) return null;
+
+        var routeArray: string[];
+        if (Array.isArray(route)) {
+            routeArray = route;
+        } else {
+            routeArray = JSON.parse(route);
+        }
+
+        var props = routeArray.slice();
+        var ref: any = modelContext;
+        var origin = modelContext.origin || [0, 0];
+
+        while (props.length) {
+            var prop = props.shift();
+            ref = ref[prop];
+
+            if (!ref) return null;
+
+            if (ref.origin && props.length) {
+                origin = point.add(origin, ref.origin);
+            }
+        }
+
+        return {
+            result: <IPath | IModel>ref,
+            offset: origin
+        };
+
     }
 
     /**
@@ -169,44 +245,7 @@ namespace MakerJs {
         return typeof value === 'object';
     }
 
-    /**
-     * @private
-     */
-    var x = {} as IPath;
-
-    /**
-     * @private
-     */
-    function reflectName(value?: any) {
-        for (var prop in x) {
-            delete x[prop];
-            return prop;
-        }
-    }
-
-    /**
-     * @private
-     */
-    function hasNamedProperty(p: IPath, value: any) {
-        var prop = reflectName();
-        return (prop in p);
-    }
-
     //points
-
-    /**
-     * An x-y point in a two-dimensional space.
-     * Implemented as an array with 2 elements. The first element is x, the second element is y.
-     * 
-     * Examples:
-     * ```
-     * var p: IPoint = [0, 0];   //typescript
-     * var p = [0, 0];   //javascript
-     * ```
-     */
-    export interface IPoint {
-        [index: number]: number;
-    }
 
     /**
      * Test to see if an object implements the required properties of a point.
@@ -214,7 +253,7 @@ namespace MakerJs {
      * @param item The item to test.
      */
     export function isPoint(item: any) {
-        return (Array.isArray(item) && (<[]>item).length == 2 && !isNaN(item[0]) && !isNaN(item[1]));
+        return item && Array.isArray(item) && (item as Array<number>).length == 2 && isNumber(item[0]) && isNumber(item[1]);
     }
 
     /**
@@ -234,6 +273,27 @@ namespace MakerJs {
     }
 
     /**
+     * A measurement of extents, with a center point.
+     */
+    export interface IMeasureWithCenter extends IMeasure {
+
+        /**
+         * The center point of the rectangle containing the item being measured.
+         */
+        center: IPoint;
+
+        /**
+         * The width of the rectangle containing the item being measured.
+         */
+        width: number;
+
+        /**
+         * The height of the rectangle containing the item being measured.
+         */
+        height: number;
+    }
+
+    /**
      * A map of measurements.
      */
     export interface IMeasureMap {
@@ -243,24 +303,40 @@ namespace MakerJs {
     //paths
 
     /**
-     * A line, curved line or other simple two dimensional shape.
+     * A path that was removed in a combine operation.
      */
-    export interface IPath {
+    export interface IPathRemoved extends IPath {
 
         /**
-         * The type of the path, e.g. "line", "circle", or "arc". These strings are enumerated in pathType.
+         * Reason the path was removed.
          */
-        "type": string;
+        reason: string;
 
         /**
-         * The main point of reference for this path.
+         * Original routekey of the path, to identify where it came from.
          */
-        origin: IPoint;
+        routeKey: string;
+    }
+
+    /**
+     * Options to pass to measure.isPointInsideModel().
+     */
+    export interface IMeasurePointInsideOptions {
 
         /**
-         * Optional layer of this path.
+         * Optional point of reference which is outside the bounds of the modelContext.
          */
-        layer?: string;
+        farPoint?: IPoint;
+
+        /**
+         * Optional atlas of measurements of paths within the model (to prevent intersection calculations).
+         */
+        measureAtlas?: measure.Atlas;
+
+        /**
+         * Output variable which will contain an array of points where the ray intersected the model. The ray is a line from pointToCheck to options.farPoint.
+         */
+        out_intersectionPoints?: IPoint[];
     }
 
     /**
@@ -269,24 +345,7 @@ namespace MakerJs {
      * @param item The item to test.
      */
     export function isPath(item: any): boolean {
-        return item && item.type && item.origin;
-    }
-
-    /**
-     * A line path.
-     * 
-     * Examples:
-     * ```
-     * var line: IPathLine = { type: 'line', origin: [0, 0], end: [1, 1] };   //typescript
-     * var line = { type: 'line', origin: [0, 0], end: [1, 1] };   //javascript
-     * ```
-     */
-    export interface IPathLine extends IPath {
-
-        /**
-         * The end point defining the line. The start point is the origin.
-         */
-        end: IPoint;
+        return item && (item as IPath).type && isPoint((item as IPath).origin);
     }
 
     /**
@@ -295,24 +354,7 @@ namespace MakerJs {
      * @param item The item to test.
      */
     export function isPathLine(item: any): boolean {
-        return isPath(item) && item.type == pathType.Line && item.end;
-    }
-
-    /**
-     * A circle path.
-     * 
-     * Examples:
-     * ```
-     * var circle: IPathCircle = { type: 'circle', origin: [0, 0], radius: 7 };   //typescript
-     * var circle = { type: 'circle', origin: [0, 0], radius: 7 };   //javascript
-     * ```
-     */
-    export interface IPathCircle extends IPath {
-
-        /**
-         * The radius of the circle.
-         */
-        radius: number;
+        return isPath(item) && (<IPath>item).type == pathType.Line && isPoint((<IPathLine>item).end);
     }
 
     /**
@@ -321,29 +363,7 @@ namespace MakerJs {
      * @param item The item to test.
      */
     export function isPathCircle(item: any): boolean {
-        return isPath(item) && item.type == pathType.Circle && hasNamedProperty(item, (<IPathCircle>x).radius = null);
-    }
-
-    /**
-     * An arc path.
-     * 
-     * Examples:
-     * ```
-     * var arc: IPathArc = { type: 'arc', origin: [0, 0], radius: 7, startAngle: 0, endAngle: 45 };   //typescript
-     * var arc = { type: 'arc', origin: [0, 0], radius: 7, startAngle: 0, endAngle: 45 };   //javascript
-     * ```
-     */
-    export interface IPathArc extends IPathCircle {
-
-        /**
-         * The angle (in degrees) to begin drawing the arc, in polar (counter-clockwise) direction.
-         */
-        startAngle: number;
-
-        /**
-         * The angle (in degrees) to end drawing the arc, in polar (counter-clockwise) direction. May be less than start angle if it past 360.
-         */
-        endAngle: number;
+        return isPath(item) && (<IPath>item).type == pathType.Circle && isNumber((<IPathCircle>item).radius);
     }
 
     /**
@@ -352,47 +372,7 @@ namespace MakerJs {
      * @param item The item to test.
      */
     export function isPathArc(item: any): boolean {
-        return isPath(item) && item.type == pathType.Arc && hasNamedProperty(item, (<IPathArc>x).radius = null) && hasNamedProperty(item, (<IPathArc>x).startAngle = null) && hasNamedProperty(item, (<IPathArc>x).endAngle = null);
-    }
-
-    /**
-     * A bezier seed defines the endpoints and control points of a bezier curve.
-     */
-    export interface IPathBezierSeed extends IPathLine {
-
-        /**
-         * The bezier control points. One point for quadratic, 2 points for cubic.
-         */
-        controls: IPoint[];
-
-        /**
-         * T values of the parent if this is a child that represents a split.
-         */
-        parentRange?: IBezierRange;
-    }
-
-    /**
-     * Bezier t values for an arc path segment in a bezier curve.
-     */
-    export interface IBezierRange {
-
-        /**
-         * The bezier t-value at the starting point.
-         */
-        startT: number;
-
-        /**
-         * The bezier t-value at the end point.
-         */
-        endT: number;
-    }
-
-    /**
-     * An arc path segment in a bezier curve.
-     */
-    export interface IPathArcInBezierCurve extends IPathArc {
-
-        bezierData: IBezierRange;
+        return isPath(item) && (<IPath>item).type == pathType.Arc && isNumber((<IPathArc>item).radius) && isNumber((<IPathArc>item).startAngle) && isNumber((<IPathArc>item).endAngle);
     }
 
     /**
@@ -401,29 +381,7 @@ namespace MakerJs {
      * @param item The item to test.
      */
     export function isPathArcInBezierCurve(item: any): boolean {
-        return isPathArc(item) && hasNamedProperty(item, (<IPathArcInBezierCurve>x).bezierData = null);
-    }
-
-    /**
-     * A map of functions which accept a path as a parameter.
-     */
-    export interface IPathFunctionMap {
-
-        /**
-         * Key is the type of a path, value is a function which accepts a path object as its parameter.
-         */
-        [type: string]: (pathValue: IPath) => void;
-    }
-
-    /**
-     * A map of functions which accept a path and an origin point as parameters.
-     */
-    export interface IPathOriginFunctionMap {
-
-        /**
-         * Key is the type of a path, value is a function which accepts a path object a point object as its parameters.
-         */
-        [type: string]: (id: string, pathValue: IPath, origin: IPoint, layer: string) => void;
+        return isPathArc(item) && isObject((<IPathArcInBezierCurve>item).bezierData) && isNumber((<IPathArcInBezierCurve>item).bezierData.startT) && isNumber((<IPathArcInBezierCurve>item).bezierData.endT);
     }
 
     /**
@@ -560,6 +518,12 @@ namespace MakerJs {
          * Cached measurements for model B.
          */
         measureB?: measure.Atlas;
+
+        /**
+         * Output array of 2 models (corresponding to the input models) containing paths that were deleted in the combination.
+         * Each path will be of type IPathRemoved, which has a .reason property describing why it was removed.
+         */
+        out_deleted?: IModel[];
     }
 
     /**
@@ -576,12 +540,7 @@ namespace MakerJs {
     /**
      * Options to pass to model.simplify()
      */
-    export interface ISimplifyOptions {
-
-        /**
-         * Optional 
-         */
-        pointMatchingDistance?: number;
+    export interface ISimplifyOptions extends IPointMatchOptions {
 
         /**
          * Optional 
@@ -607,76 +566,6 @@ namespace MakerJs {
     }
 
     //models
-
-    /**
-     * Path objects by id.
-     */
-    export interface IPathMap {
-        [id: string]: IPath;
-    }
-
-    /**
-     * Model objects by id.
-     */
-    export interface IModelMap {
-        [id: string]: IModel;
-    }
-
-    /**
-     * A model is a composite object which may contain an array of paths, or an array of models recursively.
-     * 
-     * Example:
-     * ```
-     * var m = { 
-     *   paths: { 
-     *     "line1": { type: 'line', origin: [0, 0], end: [1, 1] }, 
-     *     "line2": { type: 'line', origin: [0, 0], end: [-1, -1] } 
-     *   } 
-     * };
-     * ```
-     */
-    export interface IModel {
-
-        /**
-         * Optional origin location of this model.
-         */
-        origin?: IPoint;
-
-        /**
-         * A model may want to specify its type, but this value is not employed yet.
-         */
-        "type"?: string;
-
-        /**
-         * Optional array of path objects in this model.
-         */
-        paths?: IPathMap;
-
-        /**
-         * Optional array of models within this model.
-         */
-        models?: IModelMap;
-
-        /**
-         * Optional unit system of this model. See UnitType for possible values.
-         */
-        units?: string;
-
-        /**
-         * An author may wish to add notes to this model instance.
-         */
-        notes?: string;
-
-        /**
-         * Optional layer of this model.
-         */
-        layer?: string;
-
-        /**
-         * Optional exporter options for this model.
-         */
-        exporterOptions?: { [exporterName: string]: any };
-    }
 
     /**
      * Callback signature for model.walkPaths().
@@ -770,23 +659,45 @@ namespace MakerJs {
         /**
          * Flag if this chain forms a loop end to end.
          */
-        endless?: boolean
+        endless: boolean
 
         /**
          * Total length of all paths in the chain.
          */
         pathLength: number;
+
+        /**
+         * Chains that are contained within this chain. Populated when chains are found with the 'contain' option 
+         */
+        contains?: IChain[]
+    }
+
+    /**
+     * A map of chains by layer.
+     */
+    export interface IChainsMap {
+        [layer: string]: IChain[];
+    }
+
+    /**
+     * Test to see if an object implements the required properties of a chain.
+     * 
+     * @param item The item to test.
+     */
+    export function isChain(item: any): boolean {
+        var x = item as IChain;
+        return x && x.links && Array.isArray(x.links) && isNumber(x.pathLength);
     }
 
     /**
      * Callback to model.findChains() with resulting array of chains and unchained paths.
      */
     export interface IChainCallback {
-        (chains: IChain[], loose: IWalkPath[], layer: string): void;
+        (chains: IChain[], loose: IWalkPath[], layer: string, ignored?: IWalkPath[]): void;
     }
 
     /**
-     * Options to pass to model.findLoops.
+     * Options to pass to model.findChains.
      */
     export interface IFindChainsOptions extends IPointMatchOptions {
 
@@ -799,6 +710,27 @@ namespace MakerJs {
          * Flag to not recurse models, look only within current model's immediate paths.
          */
         shallow?: boolean;
+
+        /**
+         * Flag to order chains in a heirarchy by their paths being within one another.
+         */
+        contain?: boolean | IContainChainsOptions;
+
+        /**
+         * Flag to flatten BezierCurve arc segments into IPathBezierSeeds.
+         */
+        unifyBeziers?: boolean;
+    }
+
+    /**
+     * Sub-options to pass to model.findChains.contain option.
+     */
+    export interface IContainChainsOptions {
+
+        /**
+         * Flag to alternate direction of contained chains.
+         */
+        alternateDirection?: boolean;
     }
 
     /**
@@ -834,10 +766,35 @@ namespace MakerJs {
      * Options to pass to model.walk().
      */
     export interface IWalkOptions {
+
+        /**
+         * Callback for every path in every model.
+         */
         onPath?: IWalkPathCallback;
+
+        /**
+         * Callback for every child model in every model. Return false to stop walking down further models.
+         */
         beforeChildWalk?: IWalkModelCancellableCallback;
+
+        /**
+         * Callback for every child model in every model, after all of its children have been walked.
+         */
         afterChildWalk?: IWalkModelCallback;
     }
+
+    /**
+     * A hexagon which surrounds a model.
+     */
+    export interface IBoundingHex extends IModel {
+
+        /**
+         * Radius of the hexagon, which is also the length of a side.
+         */
+        radius: number;
+    }
+
+    //kits
 
     /**
      * Describes a parameter and its limits.
@@ -898,7 +855,112 @@ namespace MakerJs {
         notes?: string;
     }
 
+    //cascades
+    /**
+     * A container that allows a series of functions to be called upon an object.
+     */
+    export interface ICascade {
+
+        /**
+         * The initial context object of the cascade.
+         */
+        $initial: any;
+
+        /**
+         * The current final value of the cascade.
+         */
+        $result: any;
+
+        /**
+         * Use the $original as the $result.
+         */
+        $reset: () => this;
+    }
+
+    /**
+     * @private
+     */
+    class Cascade<T> implements ICascade {
+        public $result: any;
+
+        constructor(private _module: any, public $initial: T) {
+            for (var methodName in this._module) this._shadow(methodName);
+            this.$result = $initial;
+        }
+
+        private _shadow(methodName: string) {
+            var _this = this;
+            this[methodName] = function () {
+                return _this._apply(_this._module[methodName], arguments);
+            }
+        }
+
+        private _apply(fn: Function, carriedArguments: IArguments) {
+            var args = [].slice.call(carriedArguments);
+            args.unshift(this.$result);
+            this.$result = fn.apply(undefined, args);
+            return this;
+        }
+
+        public $reset() {
+            this.$result = this.$initial;
+            return this;
+        }
+    }
+
+    /**
+     * Create a container to cascade a series of functions upon a model. This allows JQuery-style method chaining, e.g.:
+     * ```
+     * makerjs.$(shape).center().rotate(45).$result
+     * ```
+     * The output of each function call becomes the first parameter input to the next function call.
+     * The returned value of the last function call is available via the `.$result` property.
+     * 
+     * @param modelContext The initial model to execute functions upon.
+     * @returns A new cascade container with ICascadeModel methods.
+     */
+    export function $(modelContext: IModel): ICascadeModel;
+
+    /**
+     * Create a container to cascade a series of functions upon a path. This allows JQuery-style method chaining, e.g.:
+     * ```
+     * makerjs.$(path).center().rotate(90).$result
+     * ```
+     * The output of each function call becomes the first parameter input to the next function call.
+     * The returned value of the last function call is available via the `.$result` property.
+     * 
+     * @param pathContext The initial path to execute functions upon.
+     * @returns A new cascade container with ICascadePath methods.
+     */
+    export function $(pathContext: IModel): ICascadePath;
+
+    /**
+     * Create a container to cascade a series of functions upon a point. This allows JQuery-style method chaining, e.g.:
+     * ```
+     * makerjs.$([1,0]).scale(5).rotate(60).$result
+     * ```
+     * The output of each function call becomes the first parameter input to the next function call.
+     * The returned value of the last function call is available via the `.$result` property.
+     * 
+     * @param pointContext The initial point to execute functions upon.
+     * @returns A new cascade container with ICascadePoint methods.
+     */
+    export function $(pointContext: IPoint): ICascadePoint;
+
+    export function $(context: any): ICascade {
+        if (isModel(context)) {
+            return new Cascade<IModel>(model, context);
+        } else if (isPath(context)) {
+            return new Cascade<IPath>(path, context);
+        } else if (isPoint(context)) {
+            return new Cascade<IPoint>(point, context);
+        }
+    }
 }
 
 //CommonJs
 module.exports = MakerJs;
+
+declare module "makerjs" {
+    export = MakerJs;
+}

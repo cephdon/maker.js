@@ -22,6 +22,7 @@ var MakerJsPlayground;
     var view;
     var viewSvgContainer;
     var gridPattern;
+    var crosshairs;
     var gridPatternFill;
     var paramsDiv;
     var measurementDiv;
@@ -44,7 +45,7 @@ var MakerJsPlayground;
     var exportWorker = null;
     var paramActiveTimeout;
     var longHoldTimeout;
-    var viewModelRootSelector = 'svg#drawing > g > g > g';
+    var viewModelRootSelector = 'svg#drawing > g > g';
     var viewOrigin;
     var viewPanOffset = [0, 0];
     var keepEventElement = null;
@@ -203,6 +204,10 @@ var MakerJsPlayground;
                 div.innerTextEscaped = true;
                 paramHtml.push(div.toString());
             }
+            //if (sliders) {
+            //var button = new makerjs.exporter.XmlTag('input', { type: 'button', onclick:'MakerJsPlayground.animate()', value: 'animate'});
+            //paramHtml.push(button.toString());
+            //}
         }
         processed.paramValues = paramValues;
         if (paramHtml.length) {
@@ -215,40 +220,34 @@ var MakerJsPlayground;
         saveParamsLink();
         paramsDiv.setAttribute('disabled', 'true');
     }
-    function generateCodeFromKit(id, kit, paramValues) {
-        var values = [];
-        var comment = [];
-        var code = [];
-        var firstComment = "//" + id + " parameters: ";
-        for (var i in kit.metaParameters) {
-            comment.push(firstComment + kit.metaParameters[i].title);
-            firstComment = "";
-            var value;
-            if (kit.metaParameters[i].type === 'font') {
-                value = 'font';
-            }
-            else {
-                value = kit.metaParameters[i].value;
-                if (kit.metaParameters[i].type === 'select') {
-                    value = value[0];
-                }
-                value = JSON.stringify(value);
-            }
-            values.push(value);
-            if (paramValues && paramValues.length >= values.length) {
-                values[values.length - 1] = paramValues[values.length - 1];
-            }
+    function safeParamName(m) {
+        return m.title.replace(/\(.*\)/gi, '').trim().replace(/\s/gi, '_');
+    }
+    function metaParameterAsString(m) {
+        var result = [];
+        for (var prop in m) {
+            result.push(prop + ': ' + JSON.stringify(m[prop]));
         }
+        return '{ ' + result.join(', ') + ' }';
+    }
+    function generateCodeFromKit(id, kit) {
+        var code = [];
+        var safeParamNames = kit.metaParameters.map(safeParamName).join(', ');
         code.push("var makerjs = require('makerjs');");
         code.push("");
-        code.push("/* Example:");
+        code.push("function demo(" + safeParamNames + ") {");
         code.push("");
-        code.push(comment.join(", "));
-        code.push("var my" + id + " = new makerjs.models." + id + "(" + values.join(', ') + ");");
+        code.push("  this.models = {");
+        code.push("    example: new makerjs.models." + id + "(" + safeParamNames + ")");
+        code.push("  };");
         code.push("");
-        code.push("*/");
+        code.push("}");
         code.push("");
-        code.push("module.exports = makerjs.models." + id + ";");
+        code.push("demo.metaParameters = [");
+        code.push(kit.metaParameters.map(function (m) { return '  ' + metaParameterAsString(m); }).join(',\n'));
+        code.push("];");
+        code.push("");
+        code.push("module.exports = demo;");
         return code.join('\n');
     }
     function resetDownload() {
@@ -291,6 +290,18 @@ var MakerJsPlayground;
             };
         }
         return Wait;
+    }());
+    var Warning = (function () {
+        function Warning() {
+            this.models = {
+                triangle: new makerjs.models.ConnectTheDots(true, [[-200, 0], [200, 0], [0, 346]]),
+                exclamation: new makerjs.models.ConnectTheDots(true, [[-10, 110], [10, 110], [16, 210], [-16, 210]])
+            };
+            this.paths = {
+                point: new makerjs.paths.Circle([0, 75], 16)
+            };
+        }
+        return Warning;
     }());
     function highlightCodeError(error) {
         var notes = '';
@@ -349,19 +360,7 @@ var MakerJsPlayground;
     function lockToPath(path) {
         //trace back to root
         var root = viewSvgContainer.querySelector(viewModelRootSelector);
-        var route = [];
-        var element = path;
-        while (element !== root) {
-            var id = element.attributes.getNamedItem('id').value;
-            route.unshift(id);
-            if (element.nodeName == 'g') {
-                route.unshift('models');
-            }
-            else {
-                route.unshift('paths');
-            }
-            element = element.parentNode;
-        }
+        var route = JSON.parse(path.attributes.getNamedItem('data-route').value);
         if (processed.lockedPath && arraysEqual(processed.lockedPath.route, route)) {
             processed.lockedPath = null;
             setNotesFromModelOrKit();
@@ -399,28 +398,13 @@ var MakerJsPlayground;
     function getLockedPathAndOffset() {
         if (!processed.lockedPath)
             return null;
-        var ref = processed.model;
-        var origin = processed.model.origin || [0, 0];
-        var route = processed.lockedPath.route.slice();
-        while (route.length) {
-            var prop = route.shift();
-            ref = ref[prop];
-            if (!ref)
-                return null;
-            if (ref.origin && route.length) {
-                origin = makerjs.point.add(origin, ref.origin);
-            }
-        }
-        return {
-            path: ref,
-            offset: origin
-        };
+        return makerjs.travel(processed.model, processed.lockedPath.route);
     }
     function updateLockedPathNotes() {
         if (processed.model && processed.lockedPath) {
             var pathAndOffset = getLockedPathAndOffset();
             if (pathAndOffset) {
-                setNotes(processed.lockedPath.notes + "``` " + JSON.stringify(pathAndOffset.path) + "```\nOffset|```" + JSON.stringify(pathAndOffset.offset) + "```");
+                setNotes(processed.lockedPath.notes + "``` " + JSON.stringify(pathAndOffset.result) + "```\nOffset|```" + JSON.stringify(pathAndOffset.offset) + "```");
             }
             else {
                 setNotesFromModelOrKit();
@@ -433,7 +417,7 @@ var MakerJsPlayground;
         var pathAndOffset = getLockedPathAndOffset();
         if (!pathAndOffset)
             return null;
-        var measure = makerjs.measure.pathExtents(pathAndOffset.path);
+        var measure = makerjs.measure.pathExtents(pathAndOffset.result);
         measure.high = makerjs.point.add(measure.high, pathAndOffset.offset);
         measure.low = makerjs.point.add(measure.low, pathAndOffset.offset);
         return measure;
@@ -533,7 +517,9 @@ var MakerJsPlayground;
     }
     function panGrid() {
         var p = makerjs.point.add(viewPanOffset, viewOrigin);
+        var op = makerjs.point.add(p, margin);
         gridPattern.setAttribute('patternTransform', 'translate(' + p[0] + ',' + p[1] + ')');
+        crosshairs.setAttribute('transform', 'translate(' + op[0] + ',' + op[1] + ')');
     }
     function getUnits() {
         if (processed.model && processed.model.units) {
@@ -574,6 +560,8 @@ var MakerJsPlayground;
             initialize();
         }
         //todo: find minimum viewScale
+        if (!makerjs.isPoint(processed.model.origin))
+            processed.model.origin = [0, 0];
         var newMeasurement = makerjs.measure.modelExtents(processed.model);
         processed.measurement = newMeasurement;
         if (!processed.measurement) {
@@ -616,7 +604,7 @@ var MakerJsPlayground;
         }
     }
     function constructOnMainThread(successCb) {
-        var fontLoader = new MakerJsPlayground.FontLoader(opentype, processed.kit.metaParameters, processed.paramValues);
+        var fontLoader = new MakerJsPlayground.FontLoader(MakerJsPlayground.fontDir, opentype, processed.kit.metaParameters, processed.paramValues);
         fontLoader.successCb = function (realValues) {
             constructOnMainThreadReal(realValues, successCb);
         };
@@ -624,7 +612,7 @@ var MakerJsPlayground;
             var errorDetails = {
                 colno: 0,
                 lineno: 0,
-                message: 'error loading font' + fonts[id].path,
+                message: 'error loading font ' + fontLoader.baseUrl + fonts[id].path,
                 name: 'Network error'
             };
             processResult({ result: errorDetails });
@@ -633,8 +621,9 @@ var MakerJsPlayground;
     }
     function constructOnMainThreadReal(realValues, successCb) {
         try {
-            var model = makerjs.kit.construct(processed.kit, realValues);
-            setProcessedModel(model);
+            var result = MakerJsPlayground.mainThreadConstructor(processed.kit, realValues);
+            processed.html = result.html;
+            setProcessedModel(result.model);
             if (successCb) {
                 successCb();
             }
@@ -681,6 +670,7 @@ var MakerJsPlayground;
             idToUrlMap[orderedDependencies[i]] = '../' + filenameFromRequireId(orderedDependencies[i], true);
         }
         var options = {
+            fontDir: '../' + MakerJsPlayground.fontDir,
             requestId: 0,
             javaScript: javaScript,
             orderedDependencies: orderedDependencies,
@@ -707,6 +697,7 @@ var MakerJsPlayground;
         };
         renderInWorker.requestId = new Date().valueOf();
         var options = {
+            fontDir: '../' + MakerJsPlayground.fontDir,
             requestId: renderInWorker.requestId,
             paramValues: processed.paramValues
         };
@@ -754,7 +745,7 @@ var MakerJsPlayground;
             paramValues = getHashParams();
         }
         else if (processed.kit) {
-            var fontLoader = new MakerJsPlayground.FontLoader(null, processed.kit.metaParameters, makerjs.kit.getParameterValues(processed.kit));
+            var fontLoader = new MakerJsPlayground.FontLoader(MakerJsPlayground.fontDir, null, processed.kit.metaParameters, makerjs.kit.getParameterValues(processed.kit));
             paramValues = fontLoader.getParamValuesWithFontSpec();
         }
         setParamValues(paramValues, true);
@@ -810,7 +801,7 @@ var MakerJsPlayground;
         if (fit) {
             MakerJsPlayground.viewScale = null;
         }
-        if (MakerJsPlayground.renderOnWorkerThread && Worker) {
+        if (MakerJsPlayground.useWorkerThreads && Worker) {
             reConstructInWorker(setProcessedModel, constructOnMainThread);
         }
         else {
@@ -821,6 +812,10 @@ var MakerJsPlayground;
         setNotes(processed.model.notes || (processed.kit ? processed.kit.notes : ''));
     }
     MakerJsPlayground.codeMirrorOptions = {
+        extraKeys: {
+            "Ctrl-Enter": function () { runCodeFromEditor(); },
+            "Ctrl-I": function () { toggleClass('collapse-insert-menu'); }
+        },
         lineNumbers: true,
         theme: 'twilight',
         viewportMargin: Infinity
@@ -828,7 +823,7 @@ var MakerJsPlayground;
     MakerJsPlayground.relativePath = '';
     MakerJsPlayground.svgStrokeWidth = 2;
     MakerJsPlayground.svgFontSize = 14;
-    MakerJsPlayground.renderOnWorkerThread = true;
+    MakerJsPlayground.useWorkerThreads = true;
     function runCodeFromEditor(paramValues) {
         document.body.classList.add('wait');
         processed.kit = null;
@@ -909,7 +904,7 @@ var MakerJsPlayground;
             function setKitOnMainThread() {
                 constructOnMainThread(enableKit);
             }
-            if (MakerJsPlayground.renderOnWorkerThread && Worker) {
+            if (MakerJsPlayground.useWorkerThreads && Worker) {
                 constructInWorker(MakerJsPlayground.codeMirrorEditor.getDoc().getValue(), value.orderedDependencies, function (model) {
                     enableKit();
                     setProcessedModel(model);
@@ -1083,20 +1078,14 @@ var MakerJsPlayground;
                 scale: MakerJsPlayground.viewScale,
                 useSvgPathOnly: false
             };
-            var renderModel = {
-                models: {
-                    ROOT: processed.model
-                }
-            };
-            var size = getModelNaturalSize();
-            var multiplier = 10;
             panGrid();
             zoomGrid();
-            renderModel.paths = {
-                'crosshairs-vertical': new makerjs.paths.Line([0, size[1] * multiplier], [0, -size[1] * multiplier]),
-                'crosshairs-horizontal': new makerjs.paths.Line([size[0] * multiplier, 0], [-size[0] * multiplier, 0])
-            };
-            html += makerjs.exporter.toSVG(renderModel, renderOptions);
+            //do not use actual units when rendering
+            var units = processed.model.units;
+            delete processed.model.units;
+            html += makerjs.exporter.toSVG(processed.model, renderOptions);
+            if (units)
+                processed.model.units = units;
         }
         viewSvgContainer.innerHTML = html;
         if (processed.lockedPath) {
@@ -1109,7 +1098,7 @@ var MakerJsPlayground;
     }
     MakerJsPlayground.render = render;
     function filenameFromRequireId(id, bustCache) {
-        var filename = MakerJsPlayground.relativePath + id + '.js';
+        var filename = isHttp(id) ? id : (MakerJsPlayground.relativePath + id + '.js');
         if (bustCache) {
             filename += '?' + new Date().valueOf();
         }
@@ -1164,22 +1153,25 @@ var MakerJsPlayground;
         if (response.percentComplete == 100 && response.text) {
             //allow progress bar to render
             setTimeout(function () {
-                var fe = MakerJsPlaygroundExport.formatMap[response.request.format];
-                var encoded = encodeURIComponent(response.text);
-                var uriPrefix = 'data:' + fe.mediaType + ',';
-                var filename = (MakerJsPlayground.querystringParams['script'] || 'my-drawing') + '.' + fe.fileExtension;
-                var dataUri = uriPrefix + encoded;
-                //create a download link
-                var a = new makerjs.exporter.XmlTag('a', { href: dataUri, download: filename });
-                a.innerText = 'download ' + response.request.formatTitle;
-                document.getElementById('download-link-container').innerHTML = a.toString();
-                preview.value = response.text;
-                document.getElementById('download-filename').innerText = filename;
-                //put the download ui into ready mode
-                toggleClass('download-generating');
-                toggleClass('download-ready');
+                setExportText(response.request.format, response.request.formatTitle, response.text);
             }, 300);
         }
+    }
+    function setExportText(format, title, text) {
+        var fe = MakerJsPlaygroundExport.formatMap[format];
+        var encoded = encodeURIComponent(text);
+        var uriPrefix = 'data:' + fe.mediaType + ',';
+        var filename = (MakerJsPlayground.querystringParams['script'] || 'my-drawing') + '.' + fe.fileExtension;
+        var dataUri = uriPrefix + encoded;
+        //create a download link
+        var a = new makerjs.exporter.XmlTag('a', { href: dataUri, download: filename });
+        a.innerText = 'download ' + title;
+        document.getElementById('download-link-container').innerHTML = a.toString();
+        preview.value = text;
+        document.getElementById('download-filename').innerText = filename;
+        //put the download ui into ready mode
+        toggleClass('download-generating');
+        toggleClass('download-ready');
     }
     function downloadClick(a, format) {
         //TODO: show options
@@ -1190,18 +1182,47 @@ var MakerJsPlayground;
             model: processed.model,
             options: {}
         };
-        _downloadClick(request);
+        beginExport(request);
     }
     MakerJsPlayground.downloadClick = downloadClick;
-    function _downloadClick(request) {
+    function beginExport(request) {
+        //put the download ui into generation mode
+        progress.style.width = '0';
+        toggleClass('download-generating');
+        if (MakerJsPlayground.useWorkerThreads && Worker) {
+            exportOnWorkerThread(request);
+        }
+        else {
+            exportOnUIThread(request);
+        }
+    }
+    function exportOnUIThread(request) {
+        var text;
+        switch (request.format) {
+            case MakerJsPlaygroundExport.ExportFormat.Dxf:
+                text = makerjs.exporter.toDXF(processed.model);
+                break;
+            case MakerJsPlaygroundExport.ExportFormat.Json:
+                text = JSON.stringify(processed.model, null, 2);
+                break;
+            case MakerJsPlaygroundExport.ExportFormat.OpenJsCad:
+                text = makerjs.exporter.toOpenJsCad(processed.model);
+                break;
+            case MakerJsPlaygroundExport.ExportFormat.Svg:
+                text = makerjs.exporter.toSVG(processed.model);
+                break;
+            default:
+                exportOnWorkerThread(request);
+                return;
+        }
+        setExportText(request.format, request.formatTitle, text);
+    }
+    function exportOnWorkerThread(request) {
         //initialize a worker - this will download scripts into the worker
         if (!exportWorker) {
             exportWorker = new Worker('worker/export-worker.js?' + new Date().valueOf());
             exportWorker.onmessage = getExport;
         }
-        //put the download ui into generation mode
-        progress.style.width = '0';
-        toggleClass('download-generating');
         //tell the worker to process the job
         exportWorker.postMessage(request);
     }
@@ -1238,6 +1259,44 @@ var MakerJsPlayground;
         }
     }
     MakerJsPlayground.onWindowResize = onWindowResize;
+    function loadInsertPage() {
+        var div = document.querySelector('#insert-menu');
+        var append = div.childNodes.length === 0;
+        if (append) {
+            var insertIframe = document.createElement('iframe');
+            insertIframe.setAttribute('src', 'insert/index.html');
+            div.appendChild(insertIframe);
+        }
+        if (toggleClass('collapse-insert-menu')) {
+            //showing
+            if (!append) {
+                //existing
+                div.querySelector('iframe').contentWindow['doFocus']();
+            }
+        }
+    }
+    MakerJsPlayground.loadInsertPage = loadInsertPage;
+    function command(cmd, value) {
+        switch (cmd) {
+            case "insert":
+                return setTimeout(function () {
+                    var doc = MakerJsPlayground.codeMirrorEditor.getDoc();
+                    var range = doc.getCursor();
+                    range.ch = 0;
+                    doc.replaceRange(value + '\n', range);
+                }, 0);
+            case "run":
+                return setTimeout(function () { return runCodeFromEditor(); }, 0);
+            case "toggle":
+                return setTimeout(function () { return toggleClass(value); }, 0);
+            case "undo":
+                return setTimeout(function () {
+                    var doc = MakerJsPlayground.codeMirrorEditor.getDoc();
+                    doc.undo();
+                }, 0);
+        }
+    }
+    MakerJsPlayground.command = command;
     //execution
     window.onload = function (ev) {
         if (window.orientation === void 0) {
@@ -1258,12 +1317,14 @@ var MakerJsPlayground;
         checkNotes = document.getElementById('check-notes');
         viewSvgContainer = document.getElementById('view-svg-container');
         gridPattern = document.getElementById('gridPattern');
+        crosshairs = document.getElementById('crosshairs');
         gridPatternFill = document.getElementById('gridPatternFill');
         margin = [viewSvgContainer.offsetLeft, viewSvgContainer.offsetTop];
         gridPattern.setAttribute('x', margin[0].toString());
         gridPattern.setAttribute('y', margin[1].toString());
         var pre = document.getElementById('init-javascript-code');
         MakerJsPlayground.codeMirrorOptions.value = pre.innerText;
+        MakerJsPlayground.codeMirrorOptions["styleActiveLine"] = true; //TODO use addons in declaration
         MakerJsPlayground.codeMirrorEditor = CodeMirror(function (elt) {
             pre.parentNode.replaceChild(elt, pre);
         }, MakerJsPlayground.codeMirrorOptions);
@@ -1275,6 +1336,7 @@ var MakerJsPlayground;
         }
         document.body.classList.add('wait');
         MakerJsPlayground.querystringParams = new QueryStringParams();
+        MakerJsPlayground.useWorkerThreads = !MakerJsPlayground.querystringParams['noworker'];
         var parentLoad = MakerJsPlayground.querystringParams['parentload'];
         if (parentLoad) {
             var fn = parent[parentLoad];
@@ -1284,18 +1346,26 @@ var MakerJsPlayground;
         }
         else {
             var scriptname = MakerJsPlayground.querystringParams['script'];
-            if (scriptname && !isHttp(scriptname)) {
-                var paramValues = getHashParams();
-                if (scriptname in makerjs.models) {
-                    var code = generateCodeFromKit(scriptname, makerjs.models[scriptname], paramValues);
-                    MakerJsPlayground.codeMirrorEditor.getDoc().setValue(code);
-                    runCodeFromEditor(paramValues);
-                }
-                else {
+            if (scriptname) {
+                if (isHttp(scriptname)) {
                     downloadScript(filenameFromRequireId(scriptname), function (download) {
                         MakerJsPlayground.codeMirrorEditor.getDoc().setValue(download);
-                        runCodeFromEditor(paramValues);
+                        setProcessedModel(new Warning(), 'WARNING: The script has been loaded from an external site. \n\n Please inspect the code and proceed at your own risk.');
                     });
+                }
+                else {
+                    var paramValues = getHashParams();
+                    if (scriptname in makerjs.models) {
+                        var code = generateCodeFromKit(scriptname, makerjs.models[scriptname]);
+                        MakerJsPlayground.codeMirrorEditor.getDoc().setValue(code);
+                        runCodeFromEditor(paramValues);
+                    }
+                    else {
+                        downloadScript(filenameFromRequireId(scriptname), function (download) {
+                            MakerJsPlayground.codeMirrorEditor.getDoc().setValue(download);
+                            runCodeFromEditor(paramValues);
+                        });
+                    }
                 }
             }
             else {

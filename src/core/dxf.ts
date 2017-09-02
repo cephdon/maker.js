@@ -18,6 +18,12 @@ namespace MakerJs.exporter {
         //http://images.autodesk.com/adsk/files/acad_dxf0.pdf
 
         var opts: IDXFRenderOptions = {};
+        var layerIds: string[] = [];
+        var dxf: { [index: string]: (string | number)[] } = { "top": [], "bottom": [] };
+        var dxfIndex = "top";
+        function append(value: string | number) {
+            dxf[dxfIndex].push(value);
+        }
 
         extendObject(opts, options);
 
@@ -28,55 +34,63 @@ namespace MakerJs.exporter {
             }
         }
 
-        var dxf: string[] = [];
+        function colorLayerOptions(layer: string): IDXFLayerOptions {
+            if (opts.layerOptions && opts.layerOptions[layer]) return opts.layerOptions[layer];
 
-        function append(value) {
-            dxf.push(value);
+            if (layer in colors) {
+                return {
+                    color: colors[layer]
+                };
+            }
         }
 
-        function defaultLayer(pathContext: IPath, layer: string) {
-            return pathContext.layer || layer || 0;
+        function defaultLayer(pathContext: IPath, parentLayer: string) {
+            var layerId = pathContext.layer || parentLayer || '0';
+            if (layerIds.indexOf(layerId) < 0) {
+                layerIds.push(layerId);
+            }
+            return layerId;
         }
 
-        var map: IPathOriginFunctionMap = {};
+        var map: { [type: string]: (id: string, pathValue: IPath, offset: IPoint, layer: string) => void; } = {};
 
-        map[pathType.Line] = function (id: string, line: IPathLine, origin: IPoint, layer: string) {
+        map[pathType.Line] = function (id: string, line: IPathLine, offset: IPoint, layer: string) {
             append("0");
             append("LINE");
             append("8");
             append(defaultLayer(line, layer));
             append("10");
-            append(line.origin[0] + origin[0]);
+            append(line.origin[0] + offset[0]);
             append("20");
-            append(line.origin[1] + origin[1]);
+            append(line.origin[1] + offset[1]);
             append("11");
-            append(line.end[0] + origin[0]);
+            append(line.end[0] + offset[0]);
             append("21");
-            append(line.end[1] + origin[1]);
+            append(line.end[1] + offset[1]);
         };
 
-        map[pathType.Circle] = function (id: string, circle: IPathCircle, origin: IPoint, layer: string) {
+        map[pathType.Circle] = function (id: string, circle: IPathCircle, offset: IPoint, layer: string) {
             append("0");
             append("CIRCLE");
             append("8");
             append(defaultLayer(circle, layer));
             append("10");
-            append(circle.origin[0] + origin[0]);
+            append(circle.origin[0] + offset[0]);
             append("20");
-            append(circle.origin[1] + origin[1]);
+            append(circle.origin[1] + offset[1]);
             append("40");
             append(circle.radius);
         };
 
-        map[pathType.Arc] = function (id: string, arc: IPathArc, origin: IPoint, layer: string) {
+        map[pathType.Arc] = function (id: string, arc: IPathArc, offset: IPoint, layer: string) {
             append("0");
             append("ARC");
             append("8");
             append(defaultLayer(arc, layer));
             append("10");
-            append(arc.origin[0] + origin[0]);
+            append(arc.origin[0] + offset[0]);
             append("20");
-            append(arc.origin[1] + origin[1]);
+            append(arc.origin[1] + offset[1]);
             append("40");
             append(arc.radius);
             append("50");
@@ -98,6 +112,43 @@ namespace MakerJs.exporter {
             append("ENDSEC");
         }
 
+        function tables(tableFn: () => void) {
+            append("2");
+            append("TABLES");
+            append("0");
+            append("TABLE");
+
+            tableFn();
+
+            append("0");
+            append("ENDTAB");
+        }
+
+        function layerOut(layerId: string, layerColor: number) {
+            append("0");
+            append("LAYER");
+            append("2");
+            append(layerId);
+            append("70");
+            append("0");
+            append("62");
+            append(layerColor);
+            append("6");
+            append("CONTINUOUS");
+        }
+
+        function layersOut() {
+            append("2");
+            append("LAYER");
+
+            layerIds.forEach(layerId => {
+                var layerOptions = colorLayerOptions(layerId);
+                if (layerOptions) {
+                    layerOut(layerId, layerOptions.color);
+                }
+            });
+        }
+
         function header() {
             var units = dxfUnit[opts.units];
 
@@ -114,8 +165,16 @@ namespace MakerJs.exporter {
             append("2");
             append("ENTITIES");
 
-            var exporter = new Exporter(map);
-            exporter.exportItem('entities', itemToExport, point.zero());
+            var walkOptions: IWalkOptions = {
+                onPath: (walkedPath: IWalkPath) => {
+                    var fn = map[walkedPath.pathContext.type];
+                    if (fn) {
+                        fn(walkedPath.pathId, walkedPath.pathContext, walkedPath.offset, walkedPath.layer);
+                    }
+                }
+            };
+
+            model.walk(modelToExport, walkOptions);
         }
 
         //fixup options
@@ -136,12 +195,17 @@ namespace MakerJs.exporter {
             section(header);
         }
 
+        dxfIndex = "bottom";
         section(entities);
 
+        dxfIndex = "top";
+        section(() => tables(layersOut));
+
+        dxfIndex = "bottom";
         append("0");
         append("EOF");
 
-        return dxf.join('\n');
+        return dxf["top"].concat(dxf["bottom"]).join('\n');
     }
 
     /**
@@ -162,9 +226,25 @@ namespace MakerJs.exporter {
     dxfUnit[unitType.Meter] = 6;
 
     /**
+     * DXF layer options.
+     */
+    export interface IDXFLayerOptions {
+
+        /**
+         * DXF layer color.
+         */
+        color: number
+    }
+
+    /**
      * DXF rendering options.
      */
     export interface IDXFRenderOptions extends IExportOptions {
+
+        /**
+         * DXF options per layer.
+         */
+        layerOptions?: { [layerId: string]: IDXFLayerOptions };
     }
 
 }

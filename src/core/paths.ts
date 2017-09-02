@@ -61,6 +61,22 @@ namespace MakerJs.paths {
 
         constructor(...args: any[]) {
 
+            function getSpan(origin: IPoint): IArcSpan {
+                var startAngle = angle.ofPointInDegrees(origin, args[clockwise ? 1 : 0]);
+                var endAngle = angle.ofPointInDegrees(origin, args[clockwise ? 0 : 1]);
+
+                if (endAngle < startAngle) {
+                    endAngle += 360;
+                }
+
+                return {
+                    origin: origin,
+                    startAngle: startAngle,
+                    endAngle: endAngle,
+                    size: endAngle - startAngle
+                };
+            }
+
             switch (args.length) {
 
                 case 5:
@@ -72,22 +88,6 @@ namespace MakerJs.paths {
                     var largeArc = args[3] as boolean;
                     var clockwise = args[4] as boolean;
                     var span: IArcSpan;
-
-                    function getSpan(origin: IPoint): IArcSpan {
-                        var startAngle = angle.ofPointInDegrees(origin, args[clockwise ? 1 : 0]);
-                        var endAngle = angle.ofPointInDegrees(origin, args[clockwise ? 0 : 1]);
-
-                        if (endAngle < startAngle) {
-                            endAngle += 360;
-                        }
-
-                        return {
-                            origin: origin,
-                            startAngle: startAngle,
-                            endAngle: endAngle,
-                            size: endAngle - startAngle
-                        };
-                    }
 
                     //make sure arc can reach. if not, scale up.
                     var smallestRadius = measure.pointDistance(pointA, pointB) / 2;
@@ -277,10 +277,18 @@ namespace MakerJs.paths {
                     }
 
                     //find intersection of slopes of perpendiculars
-                    this.origin = point.fromSlopeIntersection(perpendiculars[0], perpendiculars[1]);
+                    var origin = point.fromSlopeIntersection(perpendiculars[0], perpendiculars[1]);
 
-                    //radius is distance to any of the 3 points
-                    this.radius = measure.pointDistance(this.origin, args[0]);
+                    if (origin) {
+                        this.origin = origin;
+
+                        //radius is distance to any of the 3 points
+                        this.radius = measure.pointDistance(this.origin, args[0]);
+
+                    } else {
+                        throw 'invalid parameters - attempted to construct a circle from 3 points on a line: ' + JSON.stringify(args);
+                    }
+
                     break;
             }
         }

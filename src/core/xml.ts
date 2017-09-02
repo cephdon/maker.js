@@ -25,6 +25,11 @@
         public innerTextEscaped: boolean;
 
         /**
+         * Flag to explicitly close XML tags.
+         */
+        public closingTags?: boolean;
+
+        /**
          * Escapes certain characters within a string so that it can appear in a tag or its attribute.
          * 
          * @returns Escaped string.
@@ -61,9 +66,13 @@
         public getOpeningTag(selfClose: boolean) {
             var attrs = '';
 
-            function outputAttr(attrName, attrValue) {
+            function outputAttr(attrName: string, attrValue: any) {
 
                 if (attrValue == null || typeof attrValue === 'undefined') return;
+
+                if (Array.isArray(attrValue) || typeof attrValue === 'object') {
+                    attrValue = JSON.stringify(attrValue);
+                }
 
                 if (typeof attrValue === 'string') {
                     attrValue = XmlTag.escapeString(attrValue);
@@ -102,7 +111,7 @@
          */
         public toString(): string {
             var selfClose = !this.innerText;
-            if (selfClose) {
+            if (selfClose && !this.closingTags) {
                 return this.getOpeningTag(true);
             } else {
                 return this.getOpeningTag(false) + this.getInnerText() + this.getClosingTag();

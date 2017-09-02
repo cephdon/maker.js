@@ -4,7 +4,7 @@
      * @private
      */
     function getNonZeroSegments(pathToSegment: IPath, breakPoint: IPoint): IPath[] {
-        var segment1 = path.clone(pathToSegment);
+        var segment1 = cloneObject(pathToSegment);
 
         if (!segment1) return null;
 
@@ -105,72 +105,7 @@
     }
 
     /**
-     * @private
-     */
-    function addUniquePoints(pointArray: IPoint[], pointsToAdd: IPoint[]): number {
-
-        var added = 0;
-
-        function addUniquePoint(pointToAdd: IPoint) {
-            for (var i = 0; i < pointArray.length; i++) {
-                if (measure.isPointEqual(pointArray[i], pointToAdd, .000000001)) {
-                    return;
-                }
-            }
-            pointArray.push(pointToAdd);
-            added++;
-        }
-
-        for (var i = 0; i < pointsToAdd.length; i++) {
-            addUniquePoint(pointsToAdd[i]);
-        }
-
-        return added;
-    }
-
-    /**
-     * @private
-     */
-    function checkInsideForeignModel(segment: IPathInside, segmentOffset: IPoint, modelToIntersect: IModel, modelToIntersectAtlas: measure.Atlas, farPoint: IPoint = [7654321, 1234567]) {
-        var origin = point.add(point.middle(segment.path), segmentOffset);
-        var lineToFarPoint = new paths.Line(origin, farPoint);
-        var measureFarPoint = measure.pathExtents(lineToFarPoint);
-
-        var walkOptions: IWalkOptions = {
-            onPath: function (walkedPath: IWalkPath) {
-
-                if (modelToIntersectAtlas && !measure.isMeasurementOverlapping(measureFarPoint, modelToIntersectAtlas.pathMap[walkedPath.routeKey])) {
-                    return;
-                }
-
-                var options: IPathIntersectionOptions = { path2Offset: walkedPath.offset };
-
-                var farInt = path.intersection(lineToFarPoint, walkedPath.pathContext, options);
-
-                if (farInt) {
-                    var added = addUniquePoints(segment.uniqueForeignIntersectionPoints, farInt.intersectionPoints);
-
-                    //if number of intersections is an odd number, flip the flag.
-                    if (added % 2 == 1) {
-                        segment.isInside = !!!segment.isInside;
-                    }
-                }
-            },
-            beforeChildWalk: function (innerWalkedModel: IWalkModel): boolean {
-
-                if (!modelToIntersectAtlas) {
-                    return true;
-                }
-
-                //see if there is a model measurement. if not, it is because the model does not contain paths.
-                var innerModelMeasurement = modelToIntersectAtlas.modelMap[innerWalkedModel.routeKey];
-                return innerModelMeasurement && measure.isMeasurementOverlapping(measureFarPoint, innerModelMeasurement);
-            }
-        };
-        walk(modelToIntersect, walkOptions);
-    }
-
-    /**
+     * DEPRECATED - use measure.isPointInsideModel instead.
      * Check to see if a path is inside of a model.
      * 
      * @param pathContext The path to check.
@@ -179,30 +114,23 @@
      * @returns Boolean true if the path is inside of the modelContext.
      */
     export function isPathInsideModel(pathContext: IPath, modelContext: IModel, pathOffset?: IPoint, farPoint?: IPoint, measureAtlas?: measure.Atlas): boolean {
-        var segment: IPathInside = {
-            path: pathContext,
-            isInside: false,
-            uniqueForeignIntersectionPoints: []
+
+        var options: IMeasurePointInsideOptions = {
+            farPoint: farPoint,
+            measureAtlas: measureAtlas
         };
 
-        checkInsideForeignModel(segment, pathOffset, modelContext, measureAtlas, farPoint);
-
-        return !!segment.isInside;
+        var p = point.add(point.middle(pathContext), pathOffset);
+        return measure.isPointInsideModel(p, modelContext, options);
     }
 
     /**
      * @private
      */
-    interface IPathInside {
-        path: IPath;
+    interface ICrossedPathSegment {
         isInside?: boolean;
         uniqueForeignIntersectionPoints: IPoint[];
-    }
-
-    /**
-     * @private
-     */
-    interface ICrossedPathSegment extends IPathInside {
+        path: IPath;
         pathId: string;
         overlapped: boolean;
         duplicate?: boolean;
@@ -226,10 +154,12 @@
     }
 
     /**
+     * DEPRECATED
      * Break a model's paths everywhere they intersect with another path.
      *
      * @param modelToBreak The model containing paths to be broken.
      * @param modelToIntersect Optional model containing paths to look for intersection, or else the modelToBreak will be used.
+     * @returns The original model (for cascading).
      */
     export function breakPathsAtIntersections(modelToBreak: IModel, modelToIntersect?: IModel) {
 
@@ -247,6 +177,8 @@
         };
 
         breakAllPathsAtIntersections(modelToBreak, modelToIntersect || modelToBreak, false, modelToBreakAtlas, modelToIntersectAtlas);
+
+        return modelToBreak;
     }
 
     /**
@@ -262,7 +194,7 @@
 
                 //clone this path and make it the first segment
                 var segment: ICrossedPathSegment = {
-                    path: path.clone(outerWalkedPath.pathContext),
+                    path: cloneObject(outerWalkedPath.pathContext),
                     pathId: outerWalkedPath.pathId,
                     overlapped: false,
                     uniqueForeignIntersectionPoints: [],
@@ -293,7 +225,10 @@
                 if (checkIsInside) {
                     //check each segment whether it is inside or outside
                     for (var i = 0; i < thisPath.segments.length; i++) {
-                        checkInsideForeignModel(thisPath.segments[i], thisPath.offset, modelToIntersect, modelToIntersectAtlas, farPoint);
+                        var p = point.add(point.middle(thisPath.segments[i].path), thisPath.offset);
+                        var pointInsideOptions: IMeasurePointInsideOptions = { measureAtlas: modelToIntersectAtlas, farPoint: farPoint };
+                        thisPath.segments[i].isInside = measure.isPointInsideModel(p, modelToIntersect, pointInsideOptions);
+                        thisPath.segments[i].uniqueForeignIntersectionPoints = pointInsideOptions.out_intersectionPoints;
                     }
                 }
 
@@ -332,7 +267,14 @@
     /**
      * @private
      */
-    function addOrDeleteSegments(crossedPath: ICrossedPath, includeInside: boolean, includeOutside: boolean, keepDuplicates: boolean, atlas: measure.Atlas) {
+    interface ITrackDeleted {
+        (pathToDelete: IPath, routeKey: string, offset: IPoint, reason: string): void;
+    }
+
+    /**
+     * @private
+     */
+    function addOrDeleteSegments(crossedPath: ICrossedPath, includeInside: boolean, includeOutside: boolean, keepDuplicates: boolean, atlas: measure.Atlas, trackDeleted: ITrackDeleted) {
 
         function addSegment(modelContext: IModel, pathIdBase: string, segment: ICrossedPathSegment) {
             var id = getSimilarPathId(modelContext, pathIdBase);
@@ -356,6 +298,7 @@
                 addSegment(modelContext, pathIdBase, segment);
             } else {
                 atlas.modelsMeasured = false;
+                trackDeleted(segment.path, crossedPath.routeKey, segment.offset, 'segment is ' + (segment.isInside ? 'inside' : 'outside') + ' intersectionPoints=' + JSON.stringify(segment.uniqueForeignIntersectionPoints));
             }
         }
 
@@ -370,6 +313,8 @@
             if (crossedPath.segments[i].duplicate) {
                 if (keepDuplicates) {
                     addSegment(crossedPath.modelContext, crossedPath.pathId, crossedPath.segments[i]);
+                } else {
+                    trackDeleted(crossedPath.segments[i].path, crossedPath.routeKey, crossedPath.offset, 'segment is duplicate');
                 }
             } else {
                 checkAddSegment(crossedPath.modelContext, crossedPath.pathId, crossedPath.segments[i]);
@@ -378,7 +323,7 @@
     }
 
     /**
-     * Combine 2 models.
+     * Combine 2 models. Each model will be modified accordingly.
      *
      * @param modelA First model to combine.
      * @param modelB Second model to combine.
@@ -386,14 +331,15 @@
      * @param includeAOutsideB Flag to include paths from modelA which are outside of modelB.
      * @param includeBInsideA Flag to include paths from modelB which are inside of modelA.
      * @param includeBOutsideA Flag to include paths from modelB which are outside of modelA.
-     * @param keepDuplicates Flag to include paths which are duplicate in both models.
-     * @param farPoint Optional point of reference which is outside the bounds of both models.
+     * @param options Optional ICombineOptions object.
+     * @returns A new model containing both of the input models as "a" and "b".
      */
     export function combine(modelA: IModel, modelB: IModel, includeAInsideB: boolean = false, includeAOutsideB: boolean = true, includeBInsideA: boolean = false, includeBOutsideA: boolean = true, options?: ICombineOptions) {
 
         var opts: ICombineOptions = {
             trimDeadEnds: true,
-            pointMatchingDistance: .005
+            pointMatchingDistance: .005,
+            out_deleted: [{ paths: {} }, { paths: {} }]
         };
         extendObject(opts, options);
 
@@ -404,18 +350,33 @@
         opts.measureA.measureModels();
         opts.measureB.measureModels();
 
+        if (!opts.farPoint) {
+            var measureBoth = measure.increase(measure.increase({ high: [null, null], low: [null, null] }, opts.measureA.modelMap['']), opts.measureB.modelMap['']);
+            opts.farPoint = point.add(measureBoth.high, [1, 1]); 
+        }
+
         var pathsA = breakAllPathsAtIntersections(modelA, modelB, true, opts.measureA, opts.measureB, opts.farPoint);
         var pathsB = breakAllPathsAtIntersections(modelB, modelA, true, opts.measureB, opts.measureA, opts.farPoint);
 
         checkForEqualOverlaps(pathsA.overlappedSegments, pathsB.overlappedSegments, opts.pointMatchingDistance);
 
+        function trackDeleted(which: number, deletedPath: IPath, routeKey: string, offset: IPoint, reason: string) {
+            addPath(opts.out_deleted[which], deletedPath, 'deleted');
+            path.moveRelative(deletedPath, offset);
+            var p = deletedPath as IPathRemoved;
+            p.reason = reason;
+            p.routeKey = routeKey;
+        }
+
         for (var i = 0; i < pathsA.crossedPaths.length; i++) {
-            addOrDeleteSegments(pathsA.crossedPaths[i], includeAInsideB, includeAOutsideB, true, opts.measureA);
+            addOrDeleteSegments(pathsA.crossedPaths[i], includeAInsideB, includeAOutsideB, true, opts.measureA, (p, id, o, reason) => trackDeleted(0, p, id, o, reason));
         }
 
         for (var i = 0; i < pathsB.crossedPaths.length; i++) {
-            addOrDeleteSegments(pathsB.crossedPaths[i], includeBInsideA, includeBOutsideA, false, opts.measureB);
+            addOrDeleteSegments(pathsB.crossedPaths[i], includeBInsideA, includeBOutsideA, false, opts.measureB, (p, id, o, reason) => trackDeleted(1, p, id, o, reason));
         }
+
+        var result: IModel = { models: { a: modelA, b: modelB } };
 
         if (opts.trimDeadEnds) {
 
@@ -438,38 +399,46 @@
                 }
             }
 
-            removeDeadEnds(<IModel>{ models: { modelA: modelA, modelB: modelB } }, null, shouldKeep);
+            removeDeadEnds(result, null, shouldKeep, (wp, reason) => {
+                var which = wp.route[1] === 'a' ? 0 : 1;
+                trackDeleted(which, wp.pathContext, wp.routeKey, wp.offset, reason)
+            });
         }
 
         //pass options back to caller
         extendObject(options, opts);
+
+        return result;
     }
 
     /**
-     * Combine 2 models, resulting in a intersection.
+     * Combine 2 models, resulting in a intersection. Each model will be modified accordingly.
      *
      * @param modelA First model to combine.
      * @param modelB Second model to combine.
+     * @returns A new model containing both of the input models as "a" and "b".
      */
     export function combineIntersection(modelA: IModel, modelB: IModel) {
         return combine(modelA, modelB, true, false, true, false);
     }
 
     /**
-     * Combine 2 models, resulting in a subtraction of B from A.
+     * Combine 2 models, resulting in a subtraction of B from A. Each model will be modified accordingly.
      *
      * @param modelA First model to combine.
      * @param modelB Second model to combine.
+     * @returns A new model containing both of the input models as "a" and "b".
      */
     export function combineSubtraction(modelA: IModel, modelB: IModel) {
         return combine(modelA, modelB, false, true, true, false);
     }
 
     /**
-     * Combine 2 models, resulting in a union.
+     * Combine 2 models, resulting in a union. Each model will be modified accordingly.
      *
      * @param modelA First model to combine.
      * @param modelB Second model to combine.
+     * @returns A new model containing both of the input models as "a" and "b".
      */
     export function combineUnion(modelA: IModel, modelB: IModel) {
         return combine(modelA, modelB, false, true, false, true);

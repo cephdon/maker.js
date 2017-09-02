@@ -32,10 +32,10 @@
         if (!facetSize) return;
 
         var circle = new paths.Circle([0, 0], arcOrCircle.radius);
-        
+
         var length = measure.pathLength(circle);
         if (!length) return;
-        
+
         return length / facetSize;
     }
 
@@ -112,7 +112,7 @@
 
         for (var pathId in modelContext.paths) {
             var pathContext = modelContext.paths[pathId];
-            
+
             var fn = first ? beginMap[pathContext.type] : appendMap[pathContext.type];
 
             if (fn) {
@@ -142,9 +142,10 @@
      * @param options.resolution Size of facets.
      * @returns String of JavaScript containing a main() function for OpenJsCad.
      */
-    export function toOpenJsCad(modelToExport: IModel, options?: IOpenJsCadOptions): string {
-        if (!modelToExport) return '';
+    export function toOpenJsCad(itemToExport: any, options?: IOpenJsCadOptions): string {
+        if (!itemToExport) return '';
 
+        var modelToExport: IModel;
         var all = '';
         var depth = 0;
         var depthModel: IModel;
@@ -156,6 +157,17 @@
         };
 
         extendObject(opts, options);
+
+        if (isModel(itemToExport)) {
+            modelToExport = itemToExport;
+        } else {
+            if (Array.isArray(itemToExport)) {
+                modelToExport = { paths: {} };
+                itemToExport.forEach((p, i) => modelToExport.paths[i] = p);
+            } else {
+                modelToExport = { paths: { 0: itemToExport } };
+            }
+        }
 
         if (modelToExport.exporterOptions) {
             extendObject(opts, modelToExport.exporterOptions['toOpenJsCad']);
@@ -184,7 +196,7 @@
                 depth++;
             }
 
-            var extrudeOptions: CAG.CAG_extrude_options = { offset: [0, 0, opts.extrusion] };
+            var extrudeOptions: CAG_extrude_options = { offset: [0, 0, opts.extrusion] };
             result.push(wrap('.extrude', JSON.stringify(extrudeOptions), true));
 
             all = 'return ' + result.join('');
@@ -263,7 +275,7 @@
 
         var f = new Function('CAG', 'CSG', script);
 
-        var csg = <CSG>f(container.CAG, container.CSG);
+        var csg = f(container.CAG, container.CSG) as CSG;
 
         return csg.toStlString();
     }
@@ -271,7 +283,7 @@
     /**
      * OpenJsCad export options.
      */
-    export interface IOpenJsCadOptions extends IFindLoopsOptions {
+    export interface IOpenJsCadOptions extends IFindLoopsOptions, IExportOptions {
 
         /**
          * Optional depth of 3D extrusion.
@@ -298,4 +310,3 @@
         [modelId: string]: IOpenJsCadOptions;
     }
 }
- 

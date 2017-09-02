@@ -2,7 +2,7 @@
 
     interface IFontLoad {
         paramIndexes: number[];
-        font?: opentypejs.Font;
+        font?: opentype.Font;
     }
 
     interface IFontMap {
@@ -16,11 +16,10 @@
         private fontsLoaded = 0;
         private paramValuesCopy: any[];
 
-        public baseUrl = '/maker.js/fonts/';
         public successCb: (values: any[]) => void;
         public failureCb: (failedFontId: string) => void;
 
-        constructor(private opentype: typeof opentypejs, private metaParameters: MakerJs.IMetaParameter[], private paramValues: any[]) {
+        constructor(public baseUrl: string, private opentypeLib: typeof opentype, private metaParameters: MakerJs.IMetaParameter[], private paramValues: any[]) {
 
             if (metaParameters) {
                 metaParameters.forEach((metaParameter, i) => {
@@ -106,7 +105,7 @@
         private loadFont(fontId: string) {
 
             //load a font asynchronously
-            this.opentype.load(this.baseUrl + fonts[fontId].path, (err, font) => {
+            this.opentypeLib.load(this.baseUrl + fonts[fontId].path, (err, font) => {
                 if (err) {
                     this.failureCb(fontId);
                 } else {

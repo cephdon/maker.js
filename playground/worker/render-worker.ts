@@ -165,7 +165,7 @@ onmessage = (ev: MessageEvent) => {
         htmls.length = baseHtmlLength;
         logs.length = baseLogLength;
 
-        var fontLoader = new MakerJsPlayground.FontLoader(window['opentype'], kit.metaParameters, request.paramValues);
+        var fontLoader = new MakerJsPlayground.FontLoader(request.fontDir, window['opentype'], kit.metaParameters, request.paramValues);
 
         fontLoader.successCb = function (realValues: any[]) {
             try {
@@ -185,7 +185,7 @@ onmessage = (ev: MessageEvent) => {
         };
 
         fontLoader.failureCb = function (id) {
-            postError(request.requestId, 'error loading font' + fonts[id].path);
+            postError(request.requestId, 'error loading font ' + fontLoader.baseUrl + fonts[id].path);
         }
 
         fontLoader.load();

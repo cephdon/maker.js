@@ -1,7 +1,13 @@
 ﻿namespace MakerJs.models {
 
+    /**
+     * @private
+     */
     var hasLib = false;
 
+    /**
+     * @private
+     */
     function ensureBezierLib() {
 
         if (hasLib) return;
@@ -41,8 +47,8 @@
             ensureBezierLib();
             scratch = new Bezier(bezierJsPoints);
         } else {
-            scratch.points = bezierJsPoints;
-            scratch.update();
+            //invoke the constructor on the same object
+            Bezier.apply(scratch, bezierJsPoints);
         }
 
         return scratch;
@@ -52,7 +58,7 @@
      * @private
      */
     function BezierToSeed(b: BezierJs.Bezier, range?: IBezierRange): IPathBezierSeed {
-        var points = b.points.map(function (p) { return [p.x, p.y] as IPoint; });
+        var points = b.points.map(getIPoint);
         var seed = new BezierSeed(points) as IPathBezierSeed;
         if (range) {
             seed.parentRange = range;
@@ -80,15 +86,160 @@
     /**
      * @private
      */
-    function getArcs(b: BezierJs.Bezier, accuracy: number): IPathArcInBezierCurve[] {
+    function getExtrema(b: BezierJs.Bezier) {
 
-        var arcs = b.arcs(accuracy);
+        var extrema = b.extrema().values
 
-        return arcs.map(function (a) {
-            var arc = new paths.Arc([a.x, a.y], a.r, angle.toDegrees(a.s), angle.toDegrees(a.e)) as IPathArcInBezierCurve;
-            arc.bezierData = { startT: a.interval.start, endT: a.interval.end };
-            return arc;
-        });
+            //round the numbers so we can compare them to each other
+            .map(m => round(m))
+
+            //remove duplicates
+            .filter((value, index, self) => self.indexOf(value) === index)
+
+            //and put them in order
+            .sort();
+
+        if (extrema.length === 0) return [0, 1];
+
+        //ensure leading zero
+        if (extrema[0] !== 0) {
+            extrema.unshift(0);
+        }
+
+        //ensure ending 1
+        if (extrema[extrema.length - 1] !== 1) {
+            extrema.push(1);
+        }
+
+        return extrema;
+    }
+
+    /**
+     * @private
+     */
+    function getIPoint(p: BezierJs.Point): IPoint {
+        return [p.x, p.y];
+    }
+
+    /**
+     * @private
+     */
+    class TPoint {
+        public point: IPoint;
+
+        constructor(b: BezierJs.Bezier, public t: number, offset?: IPoint) {
+            this.point = point.add(getIPoint(b.get(t)), offset);
+        }
+    }
+
+    /**
+     * @private
+     */
+    function getError(b: BezierJs.Bezier, startT: number, endT: number, arc: IPathArc, arcReversed: boolean): number {
+        var tSpan = endT - startT;
+
+        function m(ratio: number) {
+            var t = startT + tSpan * ratio;
+            var bp = getIPoint(b.get(t));
+            var ap = point.middle(arc, arcReversed ? 1 - ratio : ratio);
+            return measure.pointDistance(ap, bp);
+        }
+
+        return m(0.25) + m(0.75);
+    }
+
+    /**
+     * @private
+     */
+    function getLargestArc(b: BezierJs.Bezier, startT: number, endT: number, accuracy: number): IPathArcInBezierCurve {
+
+        var arc: IPathArc, lastGoodArc: IPathArc;
+        var start = new TPoint(b, startT);
+        var end = new TPoint(b, endT);
+        var upper = end;
+        var lower = start;
+        var count = 0;
+        var test = upper;
+        var reversed: boolean;
+
+        while (count < 100) {
+            const middle = getIPoint(b.get((start.t + test.t) / 2));
+
+            //if the 3 points are linear, this may throw
+            try {
+                arc = new paths.Arc(start.point, middle, test.point);
+            }
+            catch (e) {
+                if (lastGoodArc) {
+                    return lastGoodArc as IPath as IPathArcInBezierCurve;
+                } else {
+                    break;
+                }
+            }
+
+            //only need to test once to see if this arc is polar / clockwise
+            if (reversed === undefined) {
+                reversed = measure.isPointEqual(start.point, point.fromAngleOnCircle(arc.endAngle, arc));
+            }
+
+            //now we have a valid arc, measure the error.
+            var error = getError(b, startT, test.t, arc, reversed);
+
+            //if error is within accuracy, this becomes the lower
+            if (error <= accuracy) {
+                (arc as IPath as IPathArcInBezierCurve).bezierData = {
+                    startT: startT,
+                    endT: test.t
+                };
+                lower = test;
+                lastGoodArc = arc;
+            } else {
+                upper = test;
+            }
+
+            //exit if lower is the end
+            if (lower.t === upper.t || (lastGoodArc && (lastGoodArc !== arc) && (angle.ofArcSpan(arc) - angle.ofArcSpan(lastGoodArc)) < .5)) {
+                return lastGoodArc as IPath as IPathArcInBezierCurve;
+            }
+
+            count++;
+            test = new TPoint(b, (lower.t + upper.t) / 2);
+        }
+
+        //arc failed, so return a line
+        var line = new paths.Line(start.point, test.point) as IPath as IPathArcInBezierCurve;
+        line.bezierData = {
+            startT: startT,
+            endT: test.t
+        };
+        return line;
+    }
+
+    /**
+     * @private
+     */
+    function getArcs(bc: BezierCurve, b: BezierJs.Bezier, accuracy: number, startT: number, endT: number, base: number): number {
+        var added = 0;
+        var arc: IPathArcInBezierCurve;
+
+        while (startT < endT) {
+
+            arc = getLargestArc(b, startT, endT, accuracy);
+            //add an arc
+
+            startT = arc.bezierData.endT
+
+            var len = measure.pathLength(arc);
+            if (len < .0001) {
+                continue;
+            }
+
+            bc.paths[arc.type + '_' + (base + added)] = arc;
+
+            added++;
+        }
+
+        return added;
     }
 
     /**
@@ -190,14 +341,11 @@
 
         constructor(points: IPoint[], accuracy?: number);
         constructor(seed: IPathBezierSeed, accuracy?: number);
-        constructor(seed: IPathBezierSeed, isChild: boolean, accuracy?: number);
         constructor(origin: IPoint, control: IPoint, end: IPoint, accuracy?: number);
         constructor(origin: IPoint, controls: IPoint[], end: IPoint, accuracy?: number);
         constructor(origin: IPoint, control1: IPoint, control2: IPoint, end: IPoint, accuracy?: number);
 
         constructor(...args: any[]) {
-
-            var isLeaf = false;
 
             var isArrayArg0 = Array.isArray(args[0]);
 
@@ -209,13 +357,7 @@
                     } else {
                         //seed
                         this.seed = args[0] as IPathBezierSeed;
-
-                        if (typeof args[1] === "boolean") {
-                            isLeaf = args[1] as boolean;
-                        } else {
-                            this.accuracy = args[1] as number;
-                        }
-
+                        this.accuracy = args[1] as number;
                         break;
                     }
                 //fall through to point array
@@ -244,10 +386,6 @@
                         case 3:
                             if (isArrayArg0) {
                                 this.seed = new BezierSeed(args.slice(0, 3) as IPoint[]);
-                            } else {
-                                this.seed = args[0] as IPathBezierSeed;
-                                isLeaf = args[1] as boolean;
-                                this.accuracy = args[2] as number;
                             }
                             break;
 
@@ -263,152 +401,146 @@
 
             if (measure.isBezierSeedLinear(this.seed)) {
                 //use a line and exit
+
+                var line = new paths.Line(point.clone(this.seed.origin), point.clone(this.seed.end));
+                (line as IPath as IPathArcInBezierCurve).bezierData = {
+                    startT: 0,
+                    endT: 1
+                };
+
                 this.paths = {
-                    'Line': new paths.Line(point.clone(this.seed.origin), point.clone(this.seed.end))
+                    "0": line
                 };
                 return;
             }
 
             var b = seedToBezier(this.seed);
+            var extrema = getExtrema(b);
 
-            if (!isLeaf) {
+            this.paths = {};
 
-                //breaking the bezier into its extrema will make the models better correspond to rectangular measurements.
-                //however, the potential drawback is that these broken curves will not get reconciled to this overall curve.
-                var extrema = b.extrema().values;
+            //use arcs
 
-                //remove leading zero
-                if (extrema.length > 0 && extrema[0] === 0) {
-                    extrema.shift();
-                }
+            if (!this.accuracy) {
+                //get a default accuracy relative to the size of the bezier
+                var len = b.length();
 
-                //remove ending 1
-                if (extrema.length > 0 && extrema[extrema.length - 1] === 1) {
-                    extrema.pop();
-                }
-
-                if (extrema.length === 0) {
-                    isLeaf = true;
-                } else {
-                    //need to create children
-
-                    //this will not contain paths, but will contain other curves
-                    this.models = {}
-
-                    var childSeeds: IPathBezierSeed[] = [];
-
-                    if (extrema.length === 1) {
-                        var split = b.split(extrema[0]);
-                        childSeeds.push(
-                            BezierToSeed(split.left, { startT: 0, endT: extrema[0] }),
-                            BezierToSeed(split.right, { startT: extrema[0], endT: 1 })
-                        );
-                    } else {
-
-                        //add 0 and 1 endings
-                        extrema.unshift(0);
-                        extrema.push(1);
-
-                        for (var i = 1; i < extrema.length; i++) {
-                            //get the bezier between 
-                            childSeeds.push(BezierToSeed(b.split(extrema[i - 1], extrema[i]), { startT: extrema[i - 1], endT: extrema[i] }));
-                        }
-                    }
-
-                    childSeeds.forEach((seed, i) => {
-                        this.models['Curve_' + (1 + i)] = new BezierCurve(seed, true, this.accuracy);
-                    });
-                }
+                //set the default to be a combination of fast rendering and good smoothing.
+                this.accuracy = len / 100;
             }
 
-            if (isLeaf) {
-
-                this.paths = {};
-
-                //use arcs
-
-                if (!this.accuracy) {
-                    //get a default accuracy relative to the size of the bezier
-                    var len = b.length();
-
-                    //set the default to be a combination of fast rendering and good smoothing.
-                    this.accuracy = len / 1000;
-                }
-
-                var arcs = getArcs(b, this.accuracy);
-
-                var i = 0;
-                arcs.forEach((arc) => {
-
-                    var span = angle.ofArcSpan(arc);
-                    if (span === 0 || span === 360) return;
-
-                    this.paths['Arc_' + (1 + i)] = arc;
-                    i++;
-                });
+            var count = 0;
+            for (var i = 1; i < extrema.length; i++) {
+                var extremaSpan = extrema[i] - extrema[i - 1];
+                count += getArcs(this, b, this.accuracy * extremaSpan, extrema[i - 1], extrema[i], count);
             }
         }
 
         public static typeName = 'BezierCurve';
 
-        public static getBezierSeeds(curve: BezierCurve, options: IFindChainsOptions = {}): IPathBezierSeed[] {
+        public static getBezierSeeds(curve: BezierCurve, options: IFindChainsOptions = {}): IPath[] | { [layer: string]: IPath[] } {
 
             options.shallow = true;
 
-            var b = seedToBezier(curve.seed);
+            var seedsByLayer: { [layer: string]: IPath[] } = {};
 
-            var seeds: IPathBezierSeed[] = [];
+            function getActualBezierRange(arc: IPathArcInBezierCurve, endpoints: IPoint[], offset: IPoint): IBezierRange {
+                var b = getScratch(curve.seed);
+                var tPoints = [arc.bezierData.startT, arc.bezierData.endT].map(t => new TPoint(b, t, offset));
+                var ends = endpoints.slice();
+
+                //clipped arcs will still have endpoints closer to the original endpoints
+                var endpointDistancetoStart = ends.map(e => measure.pointDistance(e, tPoints[0].point));
+                if (endpointDistancetoStart[0] > endpointDistancetoStart[1]) ends.reverse();
+
+                for (var i = 2; i--;) {
+                    if (!measure.isPointEqual(ends[i], tPoints[i].point)) {
+                        return null;
+                    }
+                }
+
+                return arc.bezierData;
+            }
 
             model.findChains(curve, function (chains: IChain[], loose: IWalkPath[], layer: string) {
 
-                if (chains.length === 0) {
-
-                    //if this is a linear curve then look if line ends are the same as bezier ends.
-                    if (loose.length === 1 && loose[0].pathContext.type === pathType.Line) {
-                        var line = loose[0].pathContext as IPathLine;
-                        if (measure.isPointEqual(line.origin, curve.seed.origin) && measure.isPointEqual(line.end, curve.seed.end)) {
-                            seeds.push(curve.seed)
-                        }
+                function addToLayer(pathToAdd: IPath, clone = false) {
+                    if (!seedsByLayer[layer]) {
+                        seedsByLayer[layer] = [];
                     }
-
-                } else if (chains.length === 1) {
-                    //check if endpoints are 0 and 1
-
-                    var chain = chains[0];
-                    var chainEnds = [chain.links[0], chain.links[chain.links.length - 1]];
-                    var chainReversed = false;
-
-                    //put them in bezier t order
-                    if ((chainEnds[0].walkedPath.pathContext as IPathArcInBezierCurve).bezierData.startT > (chainEnds[1].walkedPath.pathContext as IPathArcInBezierCurve).bezierData.startT) {
-                        chainEnds.reverse();
-                        chainReversed = true;
-                    }
-
-                    var intact = true;
-
-                    for (var i = 2; i--;) {
-                        var chainEnd = chainEnds[i];
-                        var arc = chainEnd.walkedPath.pathContext as IPathArcInBezierCurve;
-                        var reversed = (chainReversed !== chainEnd.reversed);
-                        var chainEndPoint = chainEnd.endPoints[reversed ? 1 - i : i];
-                        var trueEndpoint = b.compute(i === 0 ? arc.bezierData.startT : arc.bezierData.endT);
-                        if (!measure.isPointEqual(chainEndPoint, [trueEndpoint.x, trueEndpoint.y], .00001)) {
-                            intact = false;
-                            break;
-                        }
-                    }
-
-                    if (intact) {
-                        seeds.push(curve.seed)
-                    }
-
-                } else {
-                    //TODO: find bezier seeds from a split chain
+                    seedsByLayer[layer].push(clone ? path.clone(pathToAdd) : pathToAdd);
                 }
+
+                function getChainBezierRange(c: IChain): IBezierRange {
+
+                    var endLinks = [c.links[0], c.links[c.links.length - 1]];
+                    if ((endLinks[0].walkedPath.pathContext as IPathArcInBezierCurve).bezierData.startT > (endLinks[1].walkedPath.pathContext as IPathArcInBezierCurve).bezierData.startT) {
+                        chain.reverse(c);
+                        endLinks.reverse();
+                    }
+
+                    var actualBezierRanges = endLinks.map(endLink => getActualBezierRange(endLink.walkedPath.pathContext as IPathArcInBezierCurve, endLink.endPoints, endLink.walkedPath.offset));
+
+                    var result: IBezierRange = {
+                        startT: actualBezierRanges[0] ? actualBezierRanges[0].startT : null,
+                        endT: actualBezierRanges[1] ? actualBezierRanges[1].endT : null
+                    };
+
+                    if (result.startT !== null && result.endT !== null) {
+                        return result;
+
+                    } else if (c.links.length > 2) {
+
+                        if (result.startT === null) {
+                            //exclude the first from the chain
+                            addToLayer(c.links[0].walkedPath.pathContext, true);
+                            result.startT = (c.links[1].walkedPath.pathContext as IPathArcInBezierCurve).bezierData.startT;
+                        }
+
+                        if (result.endT === null) {
+                            //exclude the last from the chain
+                            addToLayer(c.links[c.links.length - 1].walkedPath.pathContext, true);
+                            result.endT = (c.links[c.links.length - 2].walkedPath.pathContext as IPathArcInBezierCurve).bezierData.endT;
+                        }
+
+                        return result;
+                    }
+                    return null;
+                }
+
+                chains.forEach(c => {
+                    var range = getChainBezierRange(c);
+                    if (range) {
+                        var b = getScratch(curve.seed);
+                        var piece = b.split(range.startT, range.endT);
+                        addToLayer(BezierToSeed(piece));
+                    } else {
+                        c.links.forEach(link => addToLayer(link.walkedPath.pathContext, true));
+                    }
+                });
+
+                loose.forEach(wp => {
+                    if (wp.pathContext.type === pathType.Line) {
+                        //bezier is linear
+                        return addToLayer(wp.pathContext, true);
+                    }
+                    var range = getActualBezierRange(wp.pathContext as IPathArcInBezierCurve, point.fromPathEnds(wp.pathContext), wp.offset);
+                    if (range) {
+                        var b = getScratch(curve.seed);
+                        var piece = b.split(range.startT, range.endT);
+                        addToLayer(BezierToSeed(piece));
+                    } else {
+                        addToLayer(wp.pathContext, true);
+                    }
+                });
 
             }, options);
 
-            return seeds;
+            if (options.byLayers) {
+                return seedsByLayer;
+            } else {
+                return seedsByLayer[''];
+            }
         }
 
         public static computeLength(seed: IPathBezierSeed): number {
@@ -421,7 +553,7 @@
 
             var computedPoint = s.compute(t);
 
-            return [computedPoint.x, computedPoint.y];
+            return getIPoint(computedPoint);
         }
 
     }

@@ -1,15 +1,15 @@
 var MakerJsPlayground;
 (function (MakerJsPlayground) {
     var FontLoader = (function () {
-        function FontLoader(opentype, metaParameters, paramValues) {
+        function FontLoader(baseUrl, opentypeLib, metaParameters, paramValues) {
             var _this = this;
-            this.opentype = opentype;
+            this.baseUrl = baseUrl;
+            this.opentypeLib = opentypeLib;
             this.metaParameters = metaParameters;
             this.paramValues = paramValues;
             this.fontParameters = {};
             this.fontRefs = 0;
             this.fontsLoaded = 0;
-            this.baseUrl = '/maker.js/fonts/';
             if (metaParameters) {
                 metaParameters.forEach(function (metaParameter, i) {
                     if (metaParameter.type !== 'font')
@@ -80,7 +80,7 @@ var MakerJsPlayground;
         FontLoader.prototype.loadFont = function (fontId) {
             var _this = this;
             //load a font asynchronously
-            this.opentype.load(this.baseUrl + fonts[fontId].path, function (err, font) {
+            this.opentypeLib.load(this.baseUrl + fonts[fontId].path, function (err, font) {
                 if (err) {
                     _this.failureCb(fontId);
                 }

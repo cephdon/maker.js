@@ -133,8 +133,13 @@ namespace MakerJsRequireIframe {
         return logHtmls;
     }
 
-    function getHtml() {
+    export function getHtml() {
         return htmls.concat(getLogsHtmls()).join('');
+    }
+
+    export function resetLog() {
+        htmls = [];
+        logs = [];
     }
 
     var head: HTMLHeadElement;
@@ -235,8 +240,7 @@ namespace MakerJsRequireIframe {
         function complete2() {
 
             //reset any calls to document.write
-            htmls = [];
-            logs = [];
+            resetLog();
 
             //reinstate alert
             window.alert = originalAlert;
@@ -250,8 +254,19 @@ namespace MakerJsRequireIframe {
                     captureExportedModel = itemToExport as MakerJs.IModel;
 
                 } else if (Array.isArray(itemToExport)) {
-                    //issue: this won't handle an array of models
-                    captureExportedModel = { paths: <MakerJs.IPathMap>itemToExport };
+                    captureExportedModel = {};
+
+                    itemToExport.forEach((x, i) => {
+                        if (makerjs.isModel(x)) {
+                            captureExportedModel.models = captureExportedModel.models || {};
+                            captureExportedModel.models[i] = x;
+                        }
+                        if (makerjs.isPath(x)) {
+                            captureExportedModel.paths = captureExportedModel.paths || {};
+                            captureExportedModel.paths[i] = x;
+                        }
+                    });
+
 
                 } else if (parent.makerjs.isPath(itemToExport)) {
                     captureExportedModel = { paths: { "0": <MakerJs.IPath>itemToExport } };
@@ -278,7 +293,7 @@ namespace MakerJsRequireIframe {
 
                     //restore properties from the "this" keyword
                     model = {};
-                    var props = ['layer', 'models', 'notes', 'origin', 'paths', 'type', 'units'];
+                    var props = ['layer', 'models', 'notes', 'origin', 'paths', 'type', 'units', 'exporterOptions'];
                     var hasProps = false;
                     for (var i = 0; i < props.length; i++) {
                         var prop = props[i];
@@ -379,3 +394,11 @@ namespace MakerJsRequireIframe {
     mockWalk(parent.makerjs, mockMakerJs);
 
 }
+
+parent.MakerJsPlayground.mainThreadConstructor = function (kit, params) {
+    MakerJsRequireIframe.resetLog();
+    return {
+        model: parent.makerjs.kit.construct(kit, params),
+        html: MakerJsRequireIframe.getHtml()
+    };
+}; 

@@ -295,6 +295,11 @@ namespace MakerJs.path {
 
         var radius = round(circle.radius);
 
+        //no-op for degenerate circle
+        if (circle.radius <= 0) {
+            return null;
+        }
+
         //clone the line
         var clonedLine = new paths.Line(point.subtract(line.origin, circle.origin), point.subtract(line.end, circle.origin));
 
@@ -362,6 +367,11 @@ namespace MakerJs.path {
      * @private
      */
     function circleToCircle(circle1: IPathCircle, circle2: IPathCircle, options: IPathIntersectionOptions): number[][] {
+        
+        //no-op if either circle is degenerate
+        if (circle1.radius <= 0 || circle2.radius <= 0) {
+            return null;
+        }
 
         //see if circles are the same
         if (circle1.radius == circle2.radius && measure.isPointEqual(circle1.origin, circle2.origin, .0001)) {
@@ -390,6 +400,36 @@ namespace MakerJs.path {
         //get X of c2 origin
         var x = c2.origin[0];
 
+        //see if circles are tangent interior on left side
+        if (round(c2.radius - x - c1.radius) == 0) {
+
+            if (options.excludeTangents) {
+                return null;
+            }
+
+            return [[unRotate(180)], [unRotate(180)]];
+        }
+
+        //see if circles are tangent interior on right side
+        if (round(c2.radius + x - c1.radius) == 0) {
+
+            if (options.excludeTangents) {
+                return null;
+            }
+
+            return [[unRotate(0)], [unRotate(0)]];
+        }
+
+        //see if circles are tangent exterior
+        if (round(x - c2.radius - c1.radius) == 0) {
+
+            if (options.excludeTangents) {
+                return null;
+            }
+
+            return [[unRotate(0)], [unRotate(180)]];
+        }
+
         //see if c2 is outside of c1
         if (round(x - c2.radius) > c1.radius) {
             return null;
@@ -403,26 +443,6 @@ namespace MakerJs.path {
         //see if c1 is within c2
         if (round(x - c2.radius) < -c1.radius) {
             return null;
-        }
-
-        //see if circles are tangent interior
-        if (round(c2.radius - x - c1.radius) == 0) {
-
-            if (options.excludeTangents) {
-                return null;
-            }
-
-            return [[unRotate(180)], [unRotate(180)]];
-        }
-
-        //see if circles are tangent exterior
-        if (round(x - c2.radius - c1.radius) == 0) {
-
-            if (options.excludeTangents) {
-                return null;
-            }
-
-            return [[unRotate(0)], [unRotate(180)]];
         }
 
         function bothAngles(oneAngle: number): number[] {

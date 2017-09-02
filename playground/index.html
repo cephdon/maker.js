@@ -32,6 +32,7 @@
     <script src="../external/pep/pep.js"></script>
     <script src="../external/marked/marked.js"></script>
     <script src="../external/codemirror/lib/codemirror.js"></script>
+    <script src="../external/codemirror/addon/active-line.js"></script>
     <script src="../external/codemirror/mode/javascript/javascript.js"></script>
     <script src="../external/bezier-js/bezier.js"></script>
     <script src="../external/opentype/opentype.js"></script>
@@ -41,56 +42,61 @@
         var module = {};
 
         function require(id) {
+            if (id == 'graham_scan') return ConvexHullGrahamScan;
             return window[id];
         }
     </script>
 
     <script src="../node_modules/clone/clone.js"></script>
-    <script src="../src/core/maker.js"></script>
-    <script src="../src/core/angle.js"></script>
-    <script src="../src/core/point.js"></script>
-    <script src="../src/core/units.js"></script>
-    <script src="../src/core/equal.js"></script>
-    <script src="../src/core/measure.js"></script>
-    <script src="../src/core/path.js"></script>
-    <script src="../src/core/break.js"></script>
-    <script src="../src/core/paths.js"></script>
-    <script src="../src/core/model.js"></script>
-    <script src="../src/core/combine.js"></script>
-    <script src="../src/core/collect.js"></script>
-    <script src="../src/core/simplify.js"></script>
-    <script src="../src/core/chain.js"></script>
-    <script src="../src/core/loops.js"></script>
-    <script src="../src/core/expand.js"></script>
-    <script src="../src/core/kit.js"></script>
-    <script src="../src/core/exporter.js"></script>
-    <script src="../src/core/importer.js"></script>
-    <script src="../src/core/dxf.js"></script>
-    <script src="../src/core/xml.js"></script>
-    <script src="../src/core/svg.js"></script>
-    <script src="../src/core/pdf.js"></script>
-    <script src="../src/core/openjscad.js"></script>
-    <script src="../src/core/solvers.js"></script>
-    <script src="../src/core/fillet.js"></script>
-    <script src="../src/core/intersect.js"></script>
-    <script src="../src/models/BoltCircle.js"></script>
-    <script src="../src/models/BoltRectangle.js"></script>
-    <script src="../src/models/Dogbone.js"></script>
-    <script src="../src/models/Dome.js"></script>
-    <script src="../src/models/RoundRectangle.js"></script>
-    <script src="../src/models/Oval.js"></script>
-    <script src="../src/models/OvalArc.js"></script>
-    <script src="../src/models/BezierCurve.js"></script>
-    <script src="../src/models/Ellipse.js"></script>
-    <script src="../src/models/ConnectTheDots.js"></script>
-    <script src="../src/models/Rectangle.js"></script>
-    <script src="../src/models/Ring.js"></script>
-    <script src="../src/models/Polygon.js"></script>
-    <script src="../src/models/Square.js"></script>
-    <script src="../src/models/Slot.js"></script>
-    <script src="../src/models/SCurve.js"></script>
-    <script src="../src/models/Star.js"></script>
-    <script src="../src/models/Text.js"></script>
+    <script src="../node_modules/graham_scan/graham_scan.min.js"></script>
+    <script src="../debug/core/maker.js"></script>
+    <script src="../debug/core/angle.js"></script>
+    <script src="../debug/core/point.js"></script>
+    <script src="../debug/core/units.js"></script>
+    <script src="../debug/core/equal.js"></script>
+    <script src="../debug/core/measure.js"></script>
+    <script src="../debug/core/path.js"></script>
+    <script src="../debug/core/break.js"></script>
+    <script src="../debug/core/paths.js"></script>
+    <script src="../debug/core/model.js"></script>
+    <script src="../debug/core/combine.js"></script>
+    <script src="../debug/core/collect.js"></script>
+    <script src="../debug/core/simplify.js"></script>
+    <script src="../debug/core/chain.js"></script>
+    <script src="../debug/core/loops.js"></script>
+    <script src="../debug/core/expand.js"></script>
+    <script src="../debug/core/kit.js"></script>
+    <script src="../debug/core/exporter.js"></script>
+    <script src="../debug/core/importer.js"></script>
+    <script src="../debug/core/dxf.js"></script>
+    <script src="../debug/core/xml.js"></script>
+    <script src="../debug/core/svg.js"></script>
+    <script src="../debug/core/pdf.js"></script>
+    <script src="../debug/core/openjscad.js"></script>
+    <script src="../debug/core/solvers.js"></script>
+    <script src="../debug/core/fillet.js"></script>
+    <script src="../debug/core/intersect.js"></script>
+    <script src="../debug/core/layout.js"></script>
+    <script src="../debug/models/Holes.js"></script>
+    <script src="../debug/models/BoltCircle.js"></script>
+    <script src="../debug/models/BoltRectangle.js"></script>
+    <script src="../debug/models/Dogbone.js"></script>
+    <script src="../debug/models/Dome.js"></script>
+    <script src="../debug/models/RoundRectangle.js"></script>
+    <script src="../debug/models/Oval.js"></script>
+    <script src="../debug/models/OvalArc.js"></script>
+    <script src="../debug/models/BezierCurve.js"></script>
+    <script src="../debug/models/Ellipse.js"></script>
+    <script src="../debug/models/ConnectTheDots.js"></script>
+    <script src="../debug/models/Rectangle.js"></script>
+    <script src="../debug/models/Ring.js"></script>
+    <script src="../debug/models/Belt.js"></script>
+    <script src="../debug/models/Polygon.js"></script>
+    <script src="../debug/models/Square.js"></script>
+    <script src="../debug/models/Slot.js"></script>
+    <script src="../debug/models/SCurve.js"></script>
+    <script src="../debug/models/Star.js"></script>
+    <script src="../debug/models/Text.js"></script>
 
     <script>
         //pretend it's been required
@@ -105,10 +111,11 @@
     <script>
         //config
         MakerJsPlayground.relativePath = '../examples/';
+        MakerJsPlayground.fontDir = '../fonts/';
     </script>
 
 </head>
-<body class="no-notes collapse-annotation">
+<body class="no-notes collapse-annotation collapse-insert-menu">
     <a name="top"></a>
 
     <main>
@@ -138,6 +145,10 @@
                     </pattern>
                 </defs>
                 <rect fill="url(#gridPattern)" width="100%" height="100%" x="0" y="0"></rect>
+                <g id="crosshairs">
+                    <line x1="-100%" x2="100%" y1="0" y2="0"></line>
+                    <line x1="0" x2="0" y1="-100%" y2="100%"></line>
+                </g>
             </svg>
 
             <div id="view-params">
@@ -202,9 +213,13 @@
             <div>
                 <div class="code-header">
                     <span>
-                        JavaScript code editor
+                        JavaScript <span id="code-editor-title">code editor</span>
                     </span>
-                    <button class="run" onclick="MakerJsPlayground.runCodeFromEditor()">&nbsp;&#x25BA; Run&nbsp;</button>
+                    <div id="insert-top">
+                        <button onclick="MakerJsPlayground.loadInsertPage()" title="Insert (CTRL + i)">Insert <span class="icon dropup">&#x25B4;</span><span class="icon dropdown">&#x25BE;</span></button>
+                        <div id="insert-menu"></div>
+                    </div>
+                    <button class="run" onclick="MakerJsPlayground.runCodeFromEditor()" title="Run (CTRL + Enter)">&nbsp;&#x25BA; Run&nbsp;</button>
                     <span class="status"></span>
                 </div>
 
@@ -218,7 +233,7 @@ this.paths = {
     mouth: new makerjs.paths.Arc([0, 0], 50, 225, 315),
     wink: new makerjs.paths.Line([-35, 20], [-15, 20])
 };
-this.notes = '# Welcome to the Maker.js playground \n You can edit the JavaScript code, then click **Run** to see your drawing.';
+this.notes = '# Welcome to the Maker.js playground \n You can edit the JavaScript code, then click **Run** (or CTRL + Enter) to see your drawing.';
 //press enter here to add more blank lines
 </pre>
             </div>

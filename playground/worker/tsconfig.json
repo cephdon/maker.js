@@ -1,18 +1,15 @@
 ﻿{
   "compilerOptions": {
-    "sourceMap": true,
-    "noLib": true
+    "lib": ["webworker", "es5", "scripthost"],
+    "skipLibCheck": true,
+    "sourceMap": true
   },
   "files": [
-    "../../typings/node/node.d.ts",
-    "../../typings/OpenJsCad/csg.d.ts",
-    "../../typings/text-encoding/text-encoding.d.ts",
-    "../../typings/maker.js/makerjs.d.ts",
-    "../../typings/lib.core.d.ts",
-    "../../typings/lib.webworker.d.ts",
+    "../../index.d.ts",
     "../iexport.ts",
     "../irender.ts",
     "../fontloader.ts",
+    "../../external/OpenJsCad/csg.d.ts",
     "export-worker.ts",
     "render-worker.ts",
     "string-reader.ts"

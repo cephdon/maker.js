@@ -1,11 +1,34 @@
 namespace MakerJs.path {
 
     /**
+     * Add a path to a model. This is basically equivalent to:
+     * ```
+     * parentModel.paths[pathId] = childPath;
+     * ```
+     * with additional checks to make it safe for cascading.
+     * 
+     * @param childPath The path to add.
+     * @param parentModel The model to add to.
+     * @param pathId The id of the path.
+     * @param overwrite Optional flag to overwrite any path referenced by pathId. Default is false, which will create an id similar to pathId.
+     * @returns The original path (for cascading).
+     */
+    export function addTo(childPath: IPath, parentModel: IModel, pathId: string, overwrite = false): IModel {
+        model.addPath(parentModel, childPath, pathId, overwrite);
+        return childPath;
+    }
+
+    /**
      * @private
      */
     function copyLayer(pathA: IPath, pathB: IPath) {
         if (pathA && pathB && ('layer' in pathA)) {
             pathB.layer = pathA.layer;
+        }
+
+        //carry extra props if this is an IPathArcInBezierCurve
+        if (pathA && pathB && ('bezierData' in pathA)) {
+            (<IPathArcInBezierCurve>pathB).bezierData = (<IPathArcInBezierCurve>pathA).bezierData;
         }
     }
 
@@ -13,31 +36,30 @@ namespace MakerJs.path {
      * Create a clone of a path. This is faster than cloneObject.
      * 
      * @param pathToClone The path to clone.
+     * @param offset Optional point to move path a relative distance.
      * @returns Cloned path.
      */
-    export function clone(pathToClone: IPath): IPath {
-        var result: IPath = null;
+    export function clone(pathToClone: IPath, offset?: IPoint): IPath {
+        var result: IPath = { type: pathToClone.type, origin: point.add(pathToClone.origin, offset) };
 
         switch (pathToClone.type) {
             case pathType.Arc:
-                var arc = <IPathArc>pathToClone;
-                result = new paths.Arc(point.clone(arc.origin), arc.radius, arc.startAngle, arc.endAngle);
-
-                //carry extra props if this is an IPathArcInBezierCurve
-                if (isPathArcInBezierCurve(arc)) {
-                    (<IPathArcInBezierCurve>result).bezierData = (<IPathArcInBezierCurve>arc).bezierData;
-                }
-
+                (<IPathArc>result).radius = (<IPathArc>pathToClone).radius;
+                (<IPathArc>result).startAngle = (<IPathArc>pathToClone).startAngle;
+                (<IPathArc>result).endAngle = (<IPathArc>pathToClone).endAngle;
                 break;
 
             case pathType.Circle:
-                var circle = <IPathCircle>pathToClone;
-                result = new paths.Circle(point.clone(circle.origin), circle.radius);
+                (<IPathCircle>result).radius = (<IPathCircle>pathToClone).radius;
                 break;
 
             case pathType.Line:
-                var line = <IPathLine>pathToClone;
-                result = new paths.Line(point.clone(line.origin), point.clone(line.end));
+                (<IPathLine>result).end = point.add((<IPathLine>pathToClone).end, offset);
+                break;
+
+            case pathType.BezierSeed:
+                (<IPathBezierSeed>result).end = point.add((<IPathBezierSeed>pathToClone).end, offset);
+                (<IPathBezierSeed>result).controls = (<IPathBezierSeed>pathToClone).controls.map(p => point.add(p, offset));
                 break;
         }
 
@@ -93,6 +115,21 @@ namespace MakerJs.path {
     };
 
     /**
+     * Set the layer of a path. This is equivalent to:
+     * ```
+     * pathContext.layer = layer;
+     * ```
+     * 
+     * @param pathContext The path to set the layer.
+     * @param layer The layer name.
+     * @returns The original path (for cascading).
+     */
+    export function layer(pathContext: IPath, layer: string): IPath {
+        pathContext.layer = layer;
+        return pathContext;
+    }
+
+    /**
      * Create a clone of a path, mirrored on either or both x and y axes.
      * 
      * @param pathToMirror The path to mirror.
@@ -132,7 +169,7 @@ namespace MakerJs.path {
      * 
      * @param pathToMove The path to move.
      * @param origin The new origin for the path.
-     * @returns The original path (for chaining).
+     * @returns The original path (for cascading).
      */
     export function move(pathToMove: IPath, origin: IPoint): IPath {
 
@@ -168,7 +205,7 @@ namespace MakerJs.path {
      * @param pathToMove The path to move.
      * @param delta The x & y adjustments as a point object.
      * @param subtract Optional boolean to subtract instead of add.
-     * @returns The original path (for chaining).
+     * @returns The original path (for cascading).
      */
     export function moveRelative(pathToMove: IPath, delta: IPoint, subtract?: boolean): IPath {
 
@@ -233,10 +270,10 @@ namespace MakerJs.path {
      * @param pathToRotate The path to rotate.
      * @param angleInDegrees The amount of rotation, in degrees.
      * @param rotationOrigin The center point of rotation.
-     * @returns The original path (for chaining).
+     * @returns The original path (for cascading).
      */
     export function rotate(pathToRotate: IPath, angleInDegrees: number, rotationOrigin: IPoint = [0, 0]): IPath {
-        if (!pathToRotate || angleInDegrees == 0) return pathToRotate;
+        if (!pathToRotate || !angleInDegrees) return pathToRotate;
 
         pathToRotate.origin = point.rotate(pathToRotate.origin, angleInDegrees, rotationOrigin);
 
@@ -273,7 +310,7 @@ namespace MakerJs.path {
      * 
      * @param pathToScale The path to scale.
      * @param scaleValue The amount of scaling.
-     * @returns The original path (for chaining).
+     * @returns The original path (for cascading).
      */
     export function scale(pathToScale: IPath, scaleValue: number): IPath {
         if (!pathToScale || scaleValue == 1) return pathToScale;
@@ -326,7 +363,7 @@ namespace MakerJs.path {
      * @returns A new IModel (for circles and arcs) or IPath (for lines and bezier seeds).
      */
     export function distort(pathToDistort: IPath, scaleX: number, scaleY: number): IModel | IPath {
-        if (!pathToDistort || (scaleX === 1 && scaleY === 1)) return null;
+        if (!pathToDistort) return null;
 
         var fn = distortMap[pathToDistort.type];
         if (fn) {
@@ -343,6 +380,7 @@ namespace MakerJs.path {
      * @param lineB Second line to converge.
      * @param useOriginA Optional flag to converge the origin point of lineA instead of the end point.
      * @param useOriginB Optional flag to converge the origin point of lineB instead of the end point.
+     * @returns point of convergence.
      */
     export function converge(lineA: IPathLine, lineB: IPathLine, useOriginA?: boolean, useOriginB?: boolean): IPoint {
         var p = point.fromSlopeIntersection(lineA, lineB);
@@ -381,4 +419,174 @@ namespace MakerJs.path {
         return p;
     }
 
+    /**
+     * @private
+     */
+    var alterMap: { [pathType: string]: (pathValue: IPath, pathLength: number, distance: number, useOrigin: boolean) => void } = {};
+
+    alterMap[pathType.Arc] = function (arc: IPathArc, pathLength: number, distance: number, useOrigin: boolean) {
+        var span = angle.ofArcSpan(arc);
+        var delta = ((pathLength + distance) * span / pathLength) - span;
+
+        if (useOrigin) {
+            arc.startAngle -= delta;
+        } else {
+            arc.endAngle += delta;
+        }
+    }
+
+    alterMap[pathType.Circle] = function (circle: IPathCircle, pathLength: number, distance: number, useOrigin: boolean) {
+        circle.radius *= (pathLength + distance) / pathLength;
+    }
+
+    alterMap[pathType.Line] = function (line: IPathLine, pathLength: number, distance: number, useOrigin: boolean) {
+        var delta = point.scale(point.subtract(line.end, line.origin), distance / pathLength);
+
+        if (useOrigin) {
+            line.origin = point.subtract(line.origin, delta);
+        } else {
+            line.end = point.add(line.end, delta);
+        }
+    }
+
+    /**
+     * Alter a path by lengthening or shortening it.
+     * 
+     * @param pathToAlter Path to alter.
+     * @param distance Numeric amount of length to add or remove from the path. Use a positive number to lengthen, negative to shorten. When shortening: this function will not alter the path and will return null if the resulting path length is less than or equal to zero.
+     * @param useOrigin Optional flag to alter from the origin instead of the end of the path.
+     * @returns The original path (for cascading), or null if the path could not be altered.
+     */
+    export function alterLength(pathToAlter: IPath, distance: number, useOrigin = false): IPath {
+        if (!pathToAlter || !distance) return null;
+
+        var fn = alterMap[pathToAlter.type];
+        if (fn) {
+            var pathLength = measure.pathLength(pathToAlter);
+
+            if (!pathLength || -distance >= pathLength) return null;
+
+            fn(pathToAlter, pathLength, distance, useOrigin);
+
+            return pathToAlter;
+        }
+
+        return null;
+    }
+
+    /**
+     * Get points along a path.
+     * 
+     * @param pathContext Path to get points from.
+     * @param numberOfPoints Number of points to divide the path.
+     * @returns Array of points which are on the path spread at a uniform interval.
+     */
+    export function toPoints(pathContext: IPath, numberOfPoints: number): IPoint[] {
+
+        //avoid division by zero when there is only one point
+        if (numberOfPoints == 1) {
+            return [point.middle(pathContext)];
+        }
+
+        var points: IPoint[] = [];
+
+        var base = numberOfPoints;
+
+        if (pathContext.type != pathType.Circle) base--;
+
+        for (var i = 0; i < numberOfPoints; i++) {
+            points.push(point.middle(pathContext, i / base));
+        }
+
+        return points;
+    }
+
+    /**
+     * @private
+     */
+    var numberOfKeyPointsMap: { [type: string]: (pathContext: IPath, maxPointDistance?: number) => number } = {};
+
+    numberOfKeyPointsMap[pathType.Line] = function (line: IPathLine) {
+        return 2;
+    };
+
+    numberOfKeyPointsMap[pathType.Circle] = function (circle: IPathCircle, maxPointDistance?: number) {
+        var len = measure.pathLength(circle);
+        if (!len) return 0;
+        maxPointDistance = maxPointDistance || len;
+        return Math.max(8, Math.ceil(len / (maxPointDistance || len)));
+    };
+
+    numberOfKeyPointsMap[pathType.Arc] = function (arc: IPathArc, maxPointDistance?: number) {
+        var len = measure.pathLength(arc);
+        if (!len) return 0;
+        var minPoints = Math.ceil(angle.ofArcSpan(arc) / 45) + 1;
+        return Math.max(minPoints, Math.ceil(len / (maxPointDistance || len)));
+    };
+
+    /**
+     * Get key points (a minimal a number of points) along a path.
+     * 
+     * @param pathContext Path to get points from.
+     * @param maxArcFacet Optional maximum length between points on an arc or circle.
+     * @returns Array of points which are on the path.
+     */
+    export function toKeyPoints(pathContext: IPath, maxArcFacet?: number): IPoint[] {
+        if (pathContext.type == pathType.BezierSeed) {
+            var curve = new models.BezierCurve(pathContext as IPathBezierSeed);
+            var curveKeyPoints: IPoint[];
+            model.findChains(curve, function (chains: IChain[], loose: IWalkPath[], layer: string) {
+                if (chains.length == 1) {
+                    var c = chains[0];
+                    switch (c.links[0].walkedPath.pathId) {
+                        case 'arc_0':
+                        case 'line_0':
+                            break;
+                        default:
+                            chain.reverse(c);
+                    }
+                    curveKeyPoints = chain.toKeyPoints(c);
+                } else if (loose.length === 1) {
+                    curveKeyPoints = toKeyPoints(loose[0].pathContext);
+                }
+            });
+            return curveKeyPoints;
+        } else {
+            var fn = numberOfKeyPointsMap[pathContext.type];
+            if (fn) {
+                var numberOfKeyPoints = fn(pathContext, maxArcFacet);
+                if (numberOfKeyPoints) {
+                    return toPoints(pathContext, numberOfKeyPoints);
+                }
+            }
+        }
+        return [];
+    }
+
+    /**
+     * Center a path at [0, 0].
+     * 
+     * @param pathToCenter The path to center.
+     * @returns The original path (for cascading).
+     */
+    export function center(pathToCenter: IPath) {
+        var m = measure.pathExtents(pathToCenter);
+        var c = point.average(m.high, m.low);
+        var o = point.subtract(pathToCenter.origin || [0, 0], c);
+        move(pathToCenter, o);
+        return pathToCenter;
+    }
+
+    /**
+     * Move a path so its bounding box begins at [0, 0].
+     * 
+     * @param pathToZero The path to zero.
+     * @returns The original path (for cascading).
+     */
+    export function zero(pathToZero: IPath) {
+        var m = measure.pathExtents(pathToZero);
+        var z = point.subtract(pathToZero.origin || [0, 0], m.low);
+        move(pathToZero, z);
+        return pathToZero;
+    }
 }
